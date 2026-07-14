@@ -38,6 +38,12 @@ public sealed partial class MainWindow : Window
     private bool _firmwarePrepared;
     private bool _firmwareBuilt;
     private bool _stLinkReady;
+    private bool _defaultBaselineVerified;
+    private bool _defaultFirmwareBuilt;
+    private bool _assignedIdentityPrepared;
+    private bool _assignedIdentityVerified;
+    private bool _publicKeyPrepared;
+    private bool _publicKeyVerified;
 
     public MainWindow()
     {
@@ -198,7 +204,7 @@ public sealed partial class MainWindow : Window
 
     private UIElement BuildFirmwarePage()
     {
-        var root = Page("Firmware provisioning", "Stage card identity, clean-build firmware, flash through ST-LINK, and verify Modbus readback.");
+        var root = Page("Firmware provisioning", "Complete four phases in order. Each phase unlocks only after verified card readback.");
         root.Children.Add(new InfoBar
         {
             IsOpen = true,
@@ -207,7 +213,7 @@ public sealed partial class MainWindow : Window
             Message = "Flashing replaces MCU program flash. RDP changes and automatic unlock are never performed. Confirm the physical target and exact serial before continuing."
         });
 
-        var target = Card("Target and prerequisites");
+        var target = Card("Connected target and flash confirmation");
         var hardware = new ComboBox { Name = "FirmwareHardwareTarget", Header = "Firmware target", SelectedIndex = 0, MinWidth = 280 };
         hardware.Items.Add(new ComboBoxItem { Content = "Stepper Motion Card", Tag = "stepper" });
         hardware.Items.Add(new ComboBoxItem { Content = "ASM I/O Card", Tag = "asm" });
@@ -217,38 +223,44 @@ public sealed partial class MainWindow : Window
         target.Children.Add(RowWith(new TextBlock { Text = "Local source", Width = 180, Foreground = Brush("TextSecondaryBrush") }, new TextBlock { Name = "FirmwareSource", Text = _firmwareTarget.LocalRoot }));
         target.Children.Add(RowWith(new TextBlock { Text = "Build output", Width = 180, Foreground = Brush("TextSecondaryBrush") }, new TextBlock { Name = "FirmwareBuildOutput", Text = _firmwareProvisioning.ElfPath }));
         target.Children.Add(KeyValue("Programmer", FirmwareProvisioningService.DefaultProgrammerPath));
-        target.Children.Add(KeyValue("Connected identity", "Generated CDI and manifest package required"));
+        target.Children.Add(new CheckBox { Name = "FlashAcknowledge", Content = "I verified the physical ST-LINK target and understand that program flash will be replaced." });
+        target.Children.Add(new TextBox { Name = "FlashSerialConfirmation", Header = "Confirm the serial shown for the current phase", PlaceholderText = "Current or assigned serial" });
         root.Children.Add(target);
 
-        var customer = Card("0. Blank-card Customer ID");
-        customer.Children.Add(new TextBlock { Text = "Enter the assigned XYYMMDDSS serial, then generate or recover one persisted 10-digit ID. Both values become final truth when flashing starts.", TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush") });
-        customer.Children.Add(new TextBox { Name = "ProvisioningSerialInput", Header = "Assigned card serial", PlaceholderText = "S26050606", MaxLength = 9, FontFamily = new FontFamily("Cascadia Mono") });
-        customer.Children.Add(new TextBlock { Name = "CustomerIdProvisioningValue", Text = "Connect a blank card (Customer ID 0000000000)", FontFamily = new FontFamily("Cascadia Mono"), FontSize = 22 });
-        customer.Children.Add(ActionButton("Generate / recover Customer ID", async (_, _) => await PrepareBlankCustomerIdAsync(), true));
-        root.Children.Add(customer);
+        var phase1 = Card("PHASE 1  •  Establish blank default firmware");
+        phase1.Children.Add(new TextBlock { Text = "Read the card first. If Customer ID is 0000000000, accept the baseline. Otherwise restore all identity headers from firmware origin/main, build, flash, and verify the blank value.", TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush") });
+        phase1.Children.Add(new TextBlock { Name = "Phase1Status", Text = "WAITING — connect and read card", Foreground = Brush("WarningBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        phase1.Children.Add(RowWith(
+            ActionButton("Accept detected blank baseline", (_, _) => AcceptDefaultBaseline(), true),
+            ActionButton("Prepare & build repository default", async (_, _) => await PrepareAndBuildDefaultAsync()),
+            ActionButton("Flash default & verify blank", async (_, _) => await FlashDefaultAndVerifyAsync())));
+        root.Children.Add(phase1);
 
-        var stages = Columns(3);
-        var prepare = Card("1. Prepare identity headers");
-        prepare.Children.Add(new TextBlock { Text = "Back up existing headers, then stage card_public_key.h, customer ID, and serial number from the current card package.", TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush") });
-        prepare.Children.Add(ActionButton("Prepare headers", async (_, _) => await PrepareFirmwareAsync(), true));
-        stages.Children.Add(new Border { Style = (Style)Application.Current.Resources["CardStyle"], Child = prepare });
+        var phase2 = Card("PHASE 2  •  Assign serial and Customer ID");
+        phase2.Children.Add(new TextBlock { Text = "Enter the production serial. The dashboard generates one Customer ID, persists the pair, restores the repository default public key, then flashes and verifies serial + Customer ID.", TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush") });
+        phase2.Children.Add(new TextBox { Name = "ProvisioningSerialInput", Header = "Assigned card serial", PlaceholderText = "S26050606", MaxLength = 9, FontFamily = new FontFamily("Cascadia Mono") });
+        phase2.Children.Add(new TextBlock { Name = "CustomerIdProvisioningValue", Text = "LOCKED — complete Phase 1", FontFamily = new FontFamily("Cascadia Mono"), FontSize = 20 });
+        phase2.Children.Add(new TextBlock { Name = "Phase2Status", Text = "LOCKED", Foreground = Brush("TextSecondaryBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        phase2.Children.Add(RowWith(
+            ActionButton("Generate / recover identity", async (_, _) => await PrepareBlankCustomerIdAsync(), true),
+            ActionButton("Prepare & build identity", async (_, _) => await PrepareAndBuildAssignedIdentityAsync()),
+            ActionButton("Flash identity & verify", async (_, _) => await FlashAssignedIdentityAndVerifyAsync())));
+        root.Children.Add(phase2);
 
-        var build = Card("2. Clean build");
-        build.Children.Add(new TextBlock { Text = "Run the hardware profile's clean CMake build and require its exact ELF output.", TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush") });
-        build.Children.Add(ActionButton("Build firmware", async (_, _) => await BuildFirmwareAsync(), true));
-        stages.Children.Add(new Border { Style = (Style)Application.Current.Resources["CardStyle"], Child = build });
+        var phase3 = Card("PHASE 3  •  Generate and flash public keys");
+        phase3.Children.Add(new TextBlock { Text = "Generate/export the P-256 package, stage card_public_key.h with the verified serial and Customer ID, then flash and validate the manifest.", TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush") });
+        phase3.Children.Add(new TextBlock { Name = "Phase3Status", Text = "LOCKED", Foreground = Brush("TextSecondaryBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        phase3.Children.Add(RowWith(
+            ActionButton("Open Keygen", (_, _) => SelectNavigation("keygen"), true),
+            ActionButton("Prepare & build key firmware", async (_, _) => await PrepareAndBuildPublicKeysAsync()),
+            ActionButton("Flash keys & verify manifest", async (_, _) => await FlashPublicKeysAndVerifyAsync())));
+        root.Children.Add(phase3);
 
-        var probe = Card("3. Inspect ST-LINK");
-        probe.Children.Add(new TextBlock { Text = "Read probe, target voltage, MCU, and option bytes. Protected RDP states stop the workflow.", TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush") });
-        probe.Children.Add(ActionButton("Detect target", async (_, _) => await ProbeTargetAsync(), true));
-        stages.Children.Add(new Border { Style = (Style)Application.Current.Resources["CardStyle"], Child = probe });
-        root.Children.Add(stages);
-
-        var flash = Card("4. Flash and verify");
-        flash.Children.Add(new CheckBox { Name = "FlashAcknowledge", Content = "I verified the physical ST-LINK target and understand that program flash will be replaced." });
-        flash.Children.Add(new TextBox { Name = "FlashSerialConfirmation", Header = "Type the exact card serial number to enable flashing", PlaceholderText = "Example: S26050606" });
-        flash.Children.Add(ActionButton("Flash firmware and verify card", async (_, _) => await FlashAndVerifyAsync(), true));
-        root.Children.Add(flash);
+        var phase4 = Card("PHASE 4  •  Final end-to-end verification");
+        phase4.Children.Add(new TextBlock { Text = "Perform a fresh read-only check of hardware profile, MCU UID, assigned serial, Customer ID, public key, fingerprint, firmware metadata, and manifest authorization.", TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush") });
+        phase4.Children.Add(new TextBlock { Name = "Phase4Status", Text = "LOCKED", Foreground = Brush("TextSecondaryBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        phase4.Children.Add(ActionButton("Run final verification", async (_, _) => await RunFinalProvisioningVerificationAsync(), true));
+        root.Children.Add(phase4);
 
         var log = new TextBox
         {
@@ -523,6 +535,11 @@ public sealed partial class MainWindow : Window
             SetStatus("Authorization blocked: connect and read a card first.");
             return;
         }
+        if (!_defaultBaselineVerified)
+        {
+            SetStatus("Complete Phase 1 and verify blank default firmware before assigning identity.");
+            return;
+        }
 
         if (_loadedManifest is null)
         {
@@ -625,16 +642,52 @@ public sealed partial class MainWindow : Window
             _connected = true;
             _authorized = false;
             _customerIdSession = null;
+            ResetProvisioningPhases();
             if (_stepperIdentity.CustomerId10 == "0000000000")
             {
                 ApplyStepperIdentity(_stepperIdentity);
+                _defaultBaselineVerified = true;
+                SetPhaseStatus("Phase1Status", "COMPLETE — blank default firmware detected", "SuccessBrush");
+                SetPhaseStatus("Phase2Status", "READY — enter assigned serial", "AccentBrush");
                 var value = FindNameInPages<TextBlock>("CustomerIdProvisioningValue");
-                if (value is not null) value.Text = $"ENTER ASSIGNED {_firmwareTarget.SerialPrefix} SERIAL";
+                if (value is not null) value.Text = $"READY — ENTER ASSIGNED {_firmwareTarget.SerialPrefix} SERIAL";
                 AppendFirmwareLog("Blank card detected. Waiting for the operator-assigned serial before creating final identity.");
             }
             else
             {
-                ApplyStepperIdentity(_stepperIdentity);
+                var recovered = await CustomerIdProvisioningService.LoadForDeviceAsync(
+                    _stepperIdentity.DeviceId96, _deviceProfile);
+                if (recovered is not null &&
+                    string.Equals(recovered.SerialNumber, _stepperIdentity.SerialNumber, StringComparison.Ordinal) &&
+                    string.Equals(recovered.CustomerId, _stepperIdentity.CustomerId10, StringComparison.Ordinal))
+                {
+                    _customerIdSession = recovered;
+                    ApplyStepperIdentity(_stepperIdentity);
+                    _defaultBaselineVerified = true;
+                    _assignedIdentityVerified = true;
+                    SetPhaseStatus("Phase1Status", "COMPLETE — recovered provisioning baseline", "SuccessBrush");
+                    SetPhaseStatus("Phase2Status", "COMPLETE — persisted serial and Customer ID match card", "SuccessBrush");
+                    SetPhaseStatus("Phase3Status", "READY — generate or verify public-key package", "AccentBrush");
+                    var manifestPath = Path.Combine(CdiStorageService.DefaultDatabaseRoot, recovered.SerialNumber, "lic_files", $"{recovered.SerialNumber}_manifest.json");
+                    if (File.Exists(manifestPath))
+                    {
+                        var manifest = await _manifestService.LoadAsync(manifestPath);
+                        var validation = _manifestService.Validate(_stepperIdentity, manifest);
+                        if (validation.IsAuthorized)
+                        {
+                            _publicKeyVerified = true;
+                            SetPhaseStatus("Phase3Status", "COMPLETE — manifest identity already matches card", "SuccessBrush");
+                            SetPhaseStatus("Phase4Status", "READY — run final read-only verification", "AccentBrush");
+                        }
+                    }
+                }
+                else
+                {
+                    ApplyStepperIdentity(_stepperIdentity);
+                    _defaultBaselineVerified = false;
+                    SetPhaseStatus("Phase1Status", $"ACTION REQUIRED — card Customer ID is {_stepperIdentity.CustomerId10}", "WarningBrush");
+                    SetPhaseStatus("Phase2Status", "LOCKED — establish default baseline", "TextSecondaryBrush");
+                }
             }
             string cdiResult;
             if (_stepperIdentity.CustomerId10 == "0000000000")
@@ -669,7 +722,7 @@ public sealed partial class MainWindow : Window
     private async void DisconnectButton_Click(object sender, RoutedEventArgs e)
     {
         await _stepperModbus.DisconnectAsync();
-        _connected = false; _authorized = false; _deviceProfile = "none"; _customerIdSession = null; ConnectionDot.Fill = Brush("ErrorBrush"); ConnectionText.Text = "Disconnected"; DeviceTypeText.Text = "No hardware selected"; SerialText.Text = "SERIAL —"; AuthText.Text = "NOT AUTHORIZED"; AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(51, 43, 55, 70)); DisconnectButton.IsEnabled = false; SetStatus("Disconnected. Authorization and hardware writes were cleared.");
+        _connected = false; _authorized = false; _deviceProfile = "none"; _customerIdSession = null; ResetProvisioningPhases(); ConnectionDot.Fill = Brush("ErrorBrush"); ConnectionText.Text = "Disconnected"; DeviceTypeText.Text = "No hardware selected"; SerialText.Text = "SERIAL —"; AuthText.Text = "NOT AUTHORIZED"; AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(51, 43, 55, 70)); DisconnectButton.IsEnabled = false; SetStatus("Disconnected. Authorization and hardware writes were cleared.");
     }
 
     private async void RefreshPorts_Click(object sender, RoutedEventArgs e) =>
@@ -744,6 +797,7 @@ public sealed partial class MainWindow : Window
         _firmwarePrepared = false;
         _firmwareBuilt = false;
         _stLinkReady = false;
+        ResetProvisioningPhases();
         var box = FindNameInPages<ComboBox>("FirmwareHardwareTarget");
         var expectedIndex = profile.Id == "asm" ? 1 : 0;
         if (box is not null && box.SelectedIndex != expectedIndex) box.SelectedIndex = expectedIndex;
@@ -788,6 +842,11 @@ public sealed partial class MainWindow : Window
             ApplyStepperIdentity(_stepperIdentity, _customerIdSession.CustomerId, _customerIdSession.SerialNumber);
             _currentCdiPath = await _cdiStorage.SaveToDatabaseAsync(_currentCdi!);
             SerialText.Text = $"SERIAL {_customerIdSession.SerialNumber} (PENDING)";
+            _assignedIdentityPrepared = false;
+            _assignedIdentityVerified = false;
+            _publicKeyPrepared = false;
+            _publicKeyVerified = false;
+            SetPhaseStatus("Phase2Status", $"IDENTITY READY — {_customerIdSession.SerialNumber} / {_customerIdSession.CustomerId}", "AccentBrush");
             AppendFirmwareLog($"Serial {_customerIdSession.SerialNumber} and Customer ID {_customerIdSession.CustomerId} are persisted; retries will reuse both.");
             SetStatus($"Assigned serial {_customerIdSession.SerialNumber} and Customer ID {_customerIdSession.CustomerId} are ready. Generate the key package next.");
         }
@@ -885,6 +944,282 @@ public sealed partial class MainWindow : Window
         {
             SetStatus($"Stepper register read failed: {ex.Message}");
         }
+    }
+
+    private void AcceptDefaultBaseline()
+    {
+        if (!_connected || _stepperIdentity is null)
+        {
+            SetStatus("Connect and read the card before accepting the default baseline.");
+            return;
+        }
+        if (_stepperIdentity.CustomerId10 != "0000000000")
+        {
+            SetStatus($"Card is not blank: Customer ID is {_stepperIdentity.CustomerId10}. Prepare and flash repository default firmware first.");
+            return;
+        }
+        _defaultBaselineVerified = true;
+        SetPhaseStatus("Phase1Status", "COMPLETE — blank default firmware verified", "SuccessBrush");
+        SetPhaseStatus("Phase2Status", "READY — enter assigned serial", "AccentBrush");
+        SetStatus("Phase 1 complete. Enter the assigned serial in Phase 2.");
+    }
+
+    private async Task PrepareAndBuildDefaultAsync()
+    {
+        if (!_connected || _stepperIdentity is null)
+        {
+            SetStatus("Connect and read the card before preparing default firmware.");
+            return;
+        }
+        try
+        {
+            AppendFirmwareLog($"PHASE 1: restoring {_firmwareTarget.DisplayName} identity headers from origin/main...");
+            var prepared = await _firmwareProvisioning.PrepareRepositoryDefaultsAsync(_stepperIdentity.SerialNumber);
+            AppendFirmwareLog($"Repository defaults staged. Backup: {prepared.BackupFolder}");
+            _defaultFirmwareBuilt = await BuildForPhaseAsync("PHASE 1 default firmware");
+            SetPhaseStatus("Phase1Status", _defaultFirmwareBuilt ? "READY TO FLASH — repository default built" : "FAILED — review build log", _defaultFirmwareBuilt ? "AccentBrush" : "ErrorBrush");
+        }
+        catch (Exception ex)
+        {
+            _defaultFirmwareBuilt = false;
+            AppendFirmwareLog($"PHASE 1 PREPARE FAILED: {ex.Message}");
+            SetStatus($"Default firmware preparation failed: {ex.Message}");
+        }
+    }
+
+    private async Task FlashDefaultAndVerifyAsync()
+    {
+        if (!_defaultFirmwareBuilt || _stepperIdentity is null || _currentCdi is null)
+        {
+            SetStatus("Prepare and build repository default firmware before Phase 1 flash.");
+            return;
+        }
+        var currentTargetSerial = _stepperIdentity.SerialNumber;
+        if (!VerifyFlashConfirmation(currentTargetSerial)) return;
+        try
+        {
+            var readback = await FlashAndReconnectForPhaseAsync(_currentCdi, currentTargetSerial, "PHASE 1");
+            if (readback.CustomerId10 != "0000000000")
+                throw new InvalidOperationException($"Default verification failed: Customer ID is {readback.CustomerId10}, expected 0000000000.");
+            _stepperIdentity = readback;
+            ApplyStepperIdentity(readback);
+            _defaultBaselineVerified = true;
+            _defaultFirmwareBuilt = false;
+            SetPhaseStatus("Phase1Status", "COMPLETE — repository default flashed and blank verified", "SuccessBrush");
+            SetPhaseStatus("Phase2Status", "READY — enter assigned serial", "AccentBrush");
+            SetStatus("Phase 1 complete. Default firmware is blank and verified.");
+        }
+        catch (Exception ex)
+        {
+            _defaultBaselineVerified = false;
+            AppendFirmwareLog($"PHASE 1 FLASH/VERIFY FAILED: {ex.Message}");
+            SetPhaseStatus("Phase1Status", "FAILED — default readback did not pass", "ErrorBrush");
+            SetStatus($"Phase 1 failed: {ex.Message}");
+        }
+    }
+
+    private async Task PrepareAndBuildAssignedIdentityAsync()
+    {
+        if (!_defaultBaselineVerified || _customerIdSession is null || _currentCdi is null)
+        {
+            SetStatus("Complete Phase 1, enter the assigned serial, and generate/recover Customer ID first.");
+            return;
+        }
+        try
+        {
+            AppendFirmwareLog("PHASE 2: staging assigned serial + Customer ID with repository default public key...");
+            var prepared = await _firmwareProvisioning.PrepareAssignedIdentityHeadersAsync(_currentCdi);
+            AppendFirmwareLog($"Phase 2 headers staged. Backup: {prepared.BackupFolder}");
+            _assignedIdentityPrepared = await BuildForPhaseAsync("PHASE 2 assigned identity firmware");
+            SetPhaseStatus("Phase2Status", _assignedIdentityPrepared ? "READY TO FLASH — identity firmware built" : "FAILED — review build log", _assignedIdentityPrepared ? "AccentBrush" : "ErrorBrush");
+        }
+        catch (Exception ex)
+        {
+            _assignedIdentityPrepared = false;
+            AppendFirmwareLog($"PHASE 2 PREPARE FAILED: {ex.Message}");
+            SetStatus($"Assigned identity preparation failed: {ex.Message}");
+        }
+    }
+
+    private async Task FlashAssignedIdentityAndVerifyAsync()
+    {
+        if (!_assignedIdentityPrepared || _customerIdSession is null || _currentCdi is null)
+        {
+            SetStatus("Prepare and build Phase 2 identity firmware first.");
+            return;
+        }
+        if (!VerifyFlashConfirmation(_currentCdi.SerialNumber)) return;
+        try
+        {
+            await _customerIdProvisioning.MarkFlashStartedAsync(_customerIdSession);
+            var readback = await FlashAndReconnectForPhaseAsync(_currentCdi, _currentCdi.SerialNumber, "PHASE 2");
+            RequireAssignedIdentityReadback(readback, _currentCdi);
+            _stepperIdentity = readback;
+            ApplyStepperIdentity(readback);
+            _assignedIdentityVerified = true;
+            _assignedIdentityPrepared = false;
+            SetPhaseStatus("Phase2Status", "COMPLETE — serial and Customer ID verified", "SuccessBrush");
+            SetPhaseStatus("Phase3Status", "READY — generate and export P-256 package", "AccentBrush");
+            SetStatus("Phase 2 complete. Generate/export the public-key package in Keygen.");
+        }
+        catch (Exception ex)
+        {
+            _assignedIdentityVerified = false;
+            AppendFirmwareLog($"PHASE 2 FLASH/VERIFY FAILED: {ex.Message}");
+            SetPhaseStatus("Phase2Status", "FAILED — assigned identity readback mismatch", "ErrorBrush");
+            SetStatus($"Phase 2 failed: {ex.Message}");
+        }
+    }
+
+    private async Task PrepareAndBuildPublicKeysAsync()
+    {
+        if (!_assignedIdentityVerified || _currentCdi is null)
+        {
+            SetStatus("Complete Phase 2 identity verification before public-key firmware.");
+            return;
+        }
+        var generatedHeader = Path.Combine(CdiStorageService.DefaultDatabaseRoot, _currentCdi.SerialNumber, "lic_files", "card_public_key.h");
+        try
+        {
+            AppendFirmwareLog("PHASE 3: staging generated public key with verified serial and Customer ID...");
+            var prepared = await _firmwareProvisioning.PrepareIdentityHeadersAsync(_currentCdi, generatedHeader);
+            AppendFirmwareLog($"Phase 3 headers staged. Backup: {prepared.BackupFolder}");
+            _publicKeyPrepared = await BuildForPhaseAsync("PHASE 3 public-key firmware");
+            SetPhaseStatus("Phase3Status", _publicKeyPrepared ? "READY TO FLASH — public-key firmware built" : "FAILED — review build log", _publicKeyPrepared ? "AccentBrush" : "ErrorBrush");
+        }
+        catch (Exception ex)
+        {
+            _publicKeyPrepared = false;
+            AppendFirmwareLog($"PHASE 3 PREPARE FAILED: {ex.Message}");
+            SetStatus($"Public-key firmware preparation failed: {ex.Message}");
+        }
+    }
+
+    private async Task FlashPublicKeysAndVerifyAsync()
+    {
+        if (!_publicKeyPrepared || _currentCdi is null)
+        {
+            SetStatus("Prepare and build Phase 3 public-key firmware first.");
+            return;
+        }
+        _firmwarePrepared = true;
+        _firmwareBuilt = true;
+        _stLinkReady = await ProbeForPhaseAsync("PHASE 3");
+        if (!_stLinkReady) return;
+        await FlashAndVerifyAsync();
+        _publicKeyVerified = _authorized;
+        if (_publicKeyVerified)
+        {
+            _publicKeyPrepared = false;
+            SetPhaseStatus("Phase3Status", "COMPLETE — public key and manifest verified", "SuccessBrush");
+            SetPhaseStatus("Phase4Status", "READY — run final read-only verification", "AccentBrush");
+        }
+        else
+        {
+            SetPhaseStatus("Phase3Status", "FAILED — manifest verification did not pass", "ErrorBrush");
+        }
+    }
+
+    private async Task RunFinalProvisioningVerificationAsync()
+    {
+        if (!_publicKeyVerified || _currentCdi is null || !_stepperModbus.IsConnected)
+        {
+            SetStatus("Complete Phase 3 and remain connected before final verification.");
+            return;
+        }
+        try
+        {
+            var expected = _currentCdi;
+            var readback = await _stepperModbus.ReadIdentityAsync();
+            RequireAssignedIdentityReadback(readback, expected);
+            var manifestPath = Path.Combine(CdiStorageService.DefaultDatabaseRoot, expected.SerialNumber, "lic_files", $"{expected.SerialNumber}_manifest.json");
+            var manifest = await _manifestService.LoadAsync(manifestPath);
+            var validation = _manifestService.Validate(readback, manifest);
+            ApplyManifestValidation(validation);
+            if (!validation.IsAuthorized) throw new InvalidOperationException(validation.Reason);
+            _stepperIdentity = readback;
+            ApplyStepperIdentity(readback);
+            SetPhaseStatus("Phase4Status", "COMPLETE — entire provisioning process verified", "SuccessBrush");
+            AppendFirmwareLog($"FINAL VERIFICATION PASSED: {_firmwareTarget.DisplayName}, {readback.SerialNumber}, Customer {readback.CustomerId10}, fingerprint {readback.PublicKeyFingerprintSha256}.");
+            SetStatus("All four provisioning phases completed and verified.");
+        }
+        catch (Exception ex)
+        {
+            SetPhaseStatus("Phase4Status", "FAILED — final verification mismatch", "ErrorBrush");
+            AppendFirmwareLog($"FINAL VERIFICATION FAILED: {ex.Message}");
+            SetStatus($"Final verification failed: {ex.Message}");
+        }
+    }
+
+    private async Task<bool> BuildForPhaseAsync(string phase)
+    {
+        AppendFirmwareLog($"{phase}: configuring and clean-building {_firmwareTarget.BuildPreset}...");
+        var result = await _firmwareProvisioning.BuildAsync();
+        AppendFirmwareLog(result.Output);
+        var passed = result.Succeeded && File.Exists(_firmwareProvisioning.ElfPath);
+        if (!passed) throw new InvalidOperationException($"{phase} build failed or expected ELF was not produced.");
+        AppendFirmwareLog($"{phase} BUILD PASSED: {_firmwareProvisioning.ElfPath}");
+        return true;
+    }
+
+    private async Task<bool> ProbeForPhaseAsync(string phase)
+    {
+        AppendFirmwareLog($"{phase}: detecting ST-LINK and checking option bytes...");
+        var probe = await _firmwareProvisioning.ProbeStLinkAsync();
+        AppendFirmwareLog(probe.Output);
+        if (!probe.Succeeded)
+        {
+            SetStatus($"{phase} target detection failed. Review the provisioning log.");
+            return false;
+        }
+        return true;
+    }
+
+    private bool VerifyFlashConfirmation(string expectedSerial)
+    {
+        if (FindNameInPages<CheckBox>("FlashAcknowledge")?.IsChecked != true)
+        {
+            SetStatus("Acknowledge the live-device warning before flashing.");
+            return false;
+        }
+        var confirmation = CustomerIdProvisioningService.NormalizeSerial(FindNameInPages<TextBox>("FlashSerialConfirmation")?.Text);
+        if (!string.Equals(confirmation, expectedSerial, StringComparison.Ordinal))
+        {
+            SetStatus($"Type exact serial {expectedSerial} in the flash confirmation field.");
+            return false;
+        }
+        return true;
+    }
+
+    private async Task<StepperIdentity> FlashAndReconnectForPhaseAsync(CardIdentityCdi cdi, string confirmationSerial, string phase)
+    {
+        if (PortBox.SelectedItem is not SerialPortDescriptor selectedPort) throw new InvalidOperationException("Select the card COM port for post-flash verification.");
+        if (!await ProbeForPhaseAsync(phase)) throw new InvalidOperationException("ST-LINK target detection failed.");
+        var baud = int.Parse(((ComboBoxItem)BaudBox.SelectedItem).Content.ToString()!);
+        var slave = checked((byte)Math.Round(SlaveIdBox.Value));
+        AppendFirmwareLog($"{phase}: disconnecting Modbus and flashing confirmed target {confirmationSerial}...");
+        await _stepperModbus.DisconnectAsync();
+        _connected = false;
+        ConnectionDot.Fill = Brush("WarningBrush");
+        ConnectionText.Text = "Flashing";
+        var flash = await _firmwareProvisioning.FlashAsync(confirmationSerial, cdi);
+        AppendFirmwareLog(flash.Output);
+        if (!flash.Succeeded) throw new InvalidOperationException($"STM32CubeProgrammer returned exit code {flash.ExitCode}.");
+        await Task.Delay(1500);
+        var readback = await _stepperModbus.ConnectAndReadIdentityAsync(selectedPort.PortName, baud, slave);
+        _connected = true;
+        ConnectionDot.Fill = Brush("SuccessBrush");
+        ConnectionText.Text = "Connected";
+        DisconnectButton.IsEnabled = true;
+        return readback;
+    }
+
+    private static void RequireAssignedIdentityReadback(StepperIdentity readback, CardIdentityCdi expected)
+    {
+        if (!string.Equals(readback.SerialNumber, expected.SerialNumber, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Serial readback mismatch. Expected {expected.SerialNumber}, card returned {readback.SerialNumber}.");
+        if (!string.Equals(readback.CustomerId10, expected.CustomerId, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Customer ID readback mismatch. Expected {expected.CustomerId}, card returned {readback.CustomerId10}.");
     }
 
     private async Task PrepareFirmwareAsync()
@@ -1064,5 +1399,27 @@ public sealed partial class MainWindow : Window
         log.Text = string.IsNullOrWhiteSpace(log.Text) || log.Text == "No firmware operation started."
             ? line
             : $"{log.Text}{Environment.NewLine}{line}";
+    }
+
+    private void ResetProvisioningPhases()
+    {
+        _defaultBaselineVerified = false;
+        _defaultFirmwareBuilt = false;
+        _assignedIdentityPrepared = false;
+        _assignedIdentityVerified = false;
+        _publicKeyPrepared = false;
+        _publicKeyVerified = false;
+        SetPhaseStatus("Phase1Status", "WAITING — connect and read card", "WarningBrush");
+        SetPhaseStatus("Phase2Status", "LOCKED", "TextSecondaryBrush");
+        SetPhaseStatus("Phase3Status", "LOCKED", "TextSecondaryBrush");
+        SetPhaseStatus("Phase4Status", "LOCKED", "TextSecondaryBrush");
+    }
+
+    private void SetPhaseStatus(string name, string text, string brushKey)
+    {
+        var status = FindNameInPages<TextBlock>(name);
+        if (status is null) return;
+        status.Text = text;
+        status.Foreground = Brush(brushKey);
     }
 }

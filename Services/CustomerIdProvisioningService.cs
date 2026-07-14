@@ -45,7 +45,7 @@ public sealed class CustomerIdProvisioningService
     {
         serialNumber = NormalizeSerial(serialNumber);
         if (!IsValidSerial(serialNumber)) throw new InvalidDataException("Assigned serial must use XYYMMDDSS format, for example S26050606 or A26050605.");
-        var existingForDevice = await FindForDeviceAsync(deviceId, hardwareProfile, databaseRoot, cancellationToken).ConfigureAwait(false);
+        var existingForDevice = await LoadForDeviceAsync(deviceId, hardwareProfile, databaseRoot, cancellationToken).ConfigureAwait(false);
         if (existingForDevice is not null && !string.Equals(existingForDevice.SerialNumber, serialNumber, StringComparison.Ordinal))
             throw new InvalidDataException($"This device already has pending/final serial {existingForDevice.SerialNumber}. Enter that serial to recover its provisioning session.");
 
@@ -97,11 +97,11 @@ public sealed class CustomerIdProvisioningService
         File.Move(temporaryPath, path, overwrite: true);
     }
 
-    private static async Task<CustomerIdProvisioningSession?> FindForDeviceAsync(
+    public static async Task<CustomerIdProvisioningSession?> LoadForDeviceAsync(
         string deviceId,
         string hardwareProfile,
-        string databaseRoot,
-        CancellationToken cancellationToken)
+        string databaseRoot = CdiStorageService.DefaultDatabaseRoot,
+        CancellationToken cancellationToken = default)
     {
         if (!Directory.Exists(databaseRoot)) return null;
         foreach (var path in Directory.EnumerateFiles(databaseRoot, SessionFileName, SearchOption.AllDirectories))

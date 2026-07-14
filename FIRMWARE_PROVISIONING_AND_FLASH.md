@@ -2,7 +2,7 @@
 
 ## Status
 
-The Unified Test & Keygen Dashboard provides a guarded end-to-end workflow for both Stepper and ASM cards. It recovers or generates blank-card identity, prepares headers, configures and builds the correct firmware profile, detects the SWD target, flashes the image, reconnects to Modbus, and validates exact identity readback.
+The Unified Test & Keygen Dashboard provides one guarded four-phase workflow for both Stepper and ASM cards: establish a default blank baseline, assign serial and Customer ID, generate and flash public keys, then perform final read-only verification.
 
 Authoritative firmware source: [rikilshah/stepper_control_card_v2](https://github.com/rikilshah/stepper_control_card_v2)
 
@@ -12,15 +12,13 @@ ASM firmware source: [rikilshah/VCB240002](https://github.com/rikilshah/VCB24000
 
 ## Operator Workflow
 
-1. Select the correct hardware profile and connect to the card.
-2. If the card reports `0000000000`, enter its assigned serial (`SYYMMDDSS` for Stepper or `AYYMMDDSS` for ASM). The dashboard then generates or recovers one persisted valid Customer ID and marks the pair pending first flash.
-3. Generate and export the manifest package using that effective CDI.
-4. Open **Firmware provisioning** and confirm the firmware target matches the connected card.
-5. Prepare identity headers, then configure and clean-build the hardware-specific preset.
-6. Detect the intended ST-LINK target.
-7. Acknowledge the physical target and type the exact card serial.
-8. Flash and verify. Once flashing starts, the persisted serial/Customer ID pair is final truth and retries reuse it.
-9. The dashboard reconnects using the saved COM settings and requires exact serial, Customer ID, and manifest identity readback before success.
+1. Select the correct hardware profile, connect, and open **Firmware provisioning**. The target remains locked to the detected card family.
+2. **Phase 1 — Default baseline:** accept a card already reporting Customer ID `0000000000`. Otherwise restore the three identity headers from local `origin/main`, configure and clean-build the default firmware, then flash and require blank readback.
+3. **Phase 2 — Serial and Customer ID:** enter the assigned serial (`SYYMMDDSS` for Stepper or `AYYMMDDSS` for ASM), generate or recover its persisted Customer ID, prepare the assigned identity with the repository-default public key, build, flash, and require exact serial/Customer ID readback.
+4. **Phase 3 — Public keys:** open Keygen, generate the CDI, P-256 keys, and manifest, prepare the generated public-key firmware, build, flash, and require complete manifest identity validation.
+5. **Phase 4 — Final verification:** run a fresh read-only identity check. The dashboard declares completion only when the live serial and Customer ID equal the persisted pair and the public identity equals the manifest.
+
+Every flash requires a successful build and ST-LINK probe, physical-target acknowledgement, and the exact currently detected card serial. Once Phase 2 flashing starts, the persisted serial/Customer ID pair is final truth and retries reuse it.
 
 The operation log records every stage and the external tool output needed to diagnose a failure.
 
@@ -46,7 +44,8 @@ Defaults:
 
 ## Safety Gates
 
-- A generated CDI and manifest package must exist before preparation.
+- Phase 1 preparation requires a synchronized local `origin/main`; it does not invent default header values.
+- A generated CDI and manifest package must exist before Phase 3 public-key preparation.
 - Preparation, clean build, and ST-LINK probe must succeed in the current session.
 - The operator must acknowledge the physical target warning.
 - Confirmation text must exactly equal the intended card serial.
@@ -70,7 +69,7 @@ Defaults:
 Verification was performed without programming a physical board:
 
 - Unified dashboard build: successful with zero warnings and errors.
-- Automated tests: 23 passed.
+- Automated tests: 24 passed.
 - Stepper clean MinSizeRel build from `main`: 24,180 bytes flash (73.79%), 3,448 bytes RAM (84.18%).
 - ASM clean Release build from `main`: 14,180 bytes flash (43.27%), 1,696 bytes RAM (41.41%).
 - ST-LINK: STM32F03x detected at 3.27 V.

@@ -33,24 +33,48 @@ Local source folders are working checkouts only and must be synchronized with th
 5. The dashboard normalizes the prefix to uppercase and writes the value to `APP_SERIAL_NUMBER_TEXT` in `serial_number_config.h`.
 6. If the MCU UID already has a persisted session, entering a different serial is rejected; the operator must recover the original assigned serial.
 
-## Implemented Provisioning Flow
+## Implemented Four-Phase Flow
 
-1. Start a first-provisioning session for a blank card.
-2. Enter and validate the assigned serial for the selected hardware.
-3. Generate one valid Customer ID and persist it together with the assigned serial, MCU UID, and hardware profile before modifying firmware.
-4. Display the assigned serial and generated Customer ID for operator review.
-5. Write the pair into the firmware headers:
+Each phase is gated. A later phase remains unavailable until the connected card passes the previous phase's readback.
+
+### Phase 1 — Establish the Default Baseline
+
+1. Connect and identify the card.
+2. If the live Customer ID is `0000000000`, accept the detected card as the default blank baseline.
+3. If it is not blank, restore `card_public_key.h`, `customer_id_config.h`, and `serial_number_config.h` from the local firmware checkout's `origin/main`, then configure and clean-build the selected hardware profile.
+4. After explicit target acknowledgement and exact live-serial confirmation, flash the default firmware.
+5. Reconnect and require the Customer ID to read back as `0000000000` before Phase 2 is enabled.
+
+### Phase 2 — Assign Serial and Customer ID
+
+1. Enter and validate the assigned serial for the selected hardware.
+2. Generate one valid Customer ID and persist it together with the assigned serial, MCU UID, and hardware profile before modifying firmware.
+3. Display the assigned serial and generated Customer ID for operator review.
+4. Restore the repository-default public-key header and write the assigned pair into the identity headers:
 
    ```c
    #define APP_CUST_ID_TEXT "1234567890"
    #define APP_SERIAL_NUMBER_TEXT "S26050606"
    ```
 
-6. Preserve the existing timestamped-header backup behavior.
-7. Build and flash the selected hardware firmware using the existing guarded process.
-8. Reconnect and compare both serial and Customer ID with the persisted values.
-9. Mark provisioning successful only when both exact values and the manifest identity match.
-10. Use that same identity pair for CDI JSON, key generation, manifest generation, authorization, logs, and reports.
+5. Preserve timestamped backups, configure, clean-build, probe, and flash through the guarded process.
+6. Reconnect and require both serial and Customer ID to exactly match the persisted values.
+
+### Phase 3 — Generate and Flash Public Keys
+
+1. Use the verified Phase 2 identity to generate the CDI, P-256 key pair, and provisioning manifest.
+2. Stage the generated public-key header while retaining the assigned serial and Customer ID.
+3. Configure and clean-build the same hardware profile, probe the target, and flash after the safety confirmations.
+4. Reconnect and require the complete live identity to match the generated manifest.
+
+### Phase 4 — Final Verification
+
+1. Perform a fresh, read-only Modbus identity read.
+2. Require exact serial and Customer ID equality with the persisted first-provisioning session.
+3. Require device ID, Customer ID, raw public key, and fingerprint to match the manifest.
+4. Declare the card complete only after every check passes. Use the same identity for authorization, logs, and reports.
+
+On application restart, the dashboard recovers the persisted session for the connected MCU UID and restores the highest phase that can be proven from live readback and the stored manifest.
 
 ## Final-Truth and Failure Rules
 
@@ -70,7 +94,7 @@ Local source folders are working checkouts only and must be synchronized with th
 ## Verification
 
 - Dashboard build: passed with zero warnings and errors.
-- Automated tests: 23 passed, including ID generation, serial formatting, persistence/recovery, duplicate device assignment rejection, hardware mismatch rejection, profile artifacts, and header compatibility.
+- Automated tests: 24 passed, including phase-separated default/public-key header staging, ID generation, serial formatting, persistence/recovery, duplicate device assignment rejection, hardware mismatch rejection, profile artifacts, and header compatibility.
 - Stepper firmware clean build from synchronized `main`: passed.
 - ASM firmware configure plus clean build from synchronized `main`: passed.
 - No physical flash was executed during automated verification.

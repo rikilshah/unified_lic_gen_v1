@@ -9,6 +9,7 @@ public sealed class FirmwareProvisioningService
     public const string DefaultFirmwareRoot = @"D:\stm32_vscode\stepper_control_card_v2";
     public const string DefaultCmakePath = @"C:\ST\STM32CubeCLT_1.15.0\CMake\bin\cmake.exe";
     public const string DefaultProgrammerPath = @"C:\ST\STM32CubeCLT_1.15.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe";
+    public const string DefaultGitPath = @"C:\Program Files\Git\cmd\git.exe";
 
     private readonly string _firmwareRoot;
     private readonly string _cmakePath;
@@ -53,25 +54,36 @@ public sealed class FirmwareProvisioningService
         if (!File.Exists(generatedPublicKeyHeader))
             throw new FileNotFoundException("Generate and export the manifest package before preparing firmware.", generatedPublicKeyHeader);
 
-        var includeFolder = Path.Combine(_firmwareRoot, "Core", "Inc");
-        if (!Directory.Exists(includeFolder)) throw new DirectoryNotFoundException($"Firmware include folder not found: {includeFolder}");
+        var result = CreatePreparation(cdi.SerialNumber);
 
-        var timestamp = DateTimeOffset.Now.ToString("yyyyMMdd_HHmmss_fff");
-        var backupFolder = Path.Combine(_firmwareRoot, ".unified-backups", cdi.SerialNumber, timestamp);
-        Directory.CreateDirectory(backupFolder);
+        File.Copy(generatedPublicKeyHeader, result.PublicKeyHeader, overwrite: true);
+        await File.WriteAllTextAsync(result.CustomerIdHeader, BuildCustomerHeader(cdi.CustomerId), Encoding.ASCII, cancellationToken).ConfigureAwait(false);
+        await File.WriteAllTextAsync(result.SerialNumberHeader, BuildSerialHeader(cdi.SerialNumber), Encoding.ASCII, cancellationToken).ConfigureAwait(false);
 
-        var publicKeyTarget = Path.Combine(includeFolder, "card_public_key.h");
-        var customerTarget = Path.Combine(includeFolder, "customer_id_config.h");
-        var serialTarget = Path.Combine(includeFolder, "serial_number_config.h");
-        BackupIfPresent(publicKeyTarget, backupFolder);
-        BackupIfPresent(customerTarget, backupFolder);
-        BackupIfPresent(serialTarget, backupFolder);
+        return result;
+    }
 
-        File.Copy(generatedPublicKeyHeader, publicKeyTarget, overwrite: true);
-        await File.WriteAllTextAsync(customerTarget, BuildCustomerHeader(cdi.CustomerId), Encoding.ASCII, cancellationToken).ConfigureAwait(false);
-        await File.WriteAllTextAsync(serialTarget, BuildSerialHeader(cdi.SerialNumber), Encoding.ASCII, cancellationToken).ConfigureAwait(false);
+    public async Task<FirmwarePreparationResult> PrepareRepositoryDefaultsAsync(
+        string backupIdentity,
+        CancellationToken cancellationToken = default)
+    {
+        var result = CreatePreparation(backupIdentity);
+        await RestoreRepositoryFileAsync("Core/Inc/card_public_key.h", result.PublicKeyHeader, cancellationToken).ConfigureAwait(false);
+        await RestoreRepositoryFileAsync("Core/Inc/customer_id_config.h", result.CustomerIdHeader, cancellationToken).ConfigureAwait(false);
+        await RestoreRepositoryFileAsync("Core/Inc/serial_number_config.h", result.SerialNumberHeader, cancellationToken).ConfigureAwait(false);
+        return result;
+    }
 
-        return new FirmwarePreparationResult(backupFolder, publicKeyTarget, customerTarget, serialTarget);
+    public async Task<FirmwarePreparationResult> PrepareAssignedIdentityHeadersAsync(
+        CardIdentityCdi cdi,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(cdi);
+        var result = CreatePreparation(cdi.SerialNumber);
+        await RestoreRepositoryFileAsync("Core/Inc/card_public_key.h", result.PublicKeyHeader, cancellationToken).ConfigureAwait(false);
+        await File.WriteAllTextAsync(result.CustomerIdHeader, BuildCustomerHeader(cdi.CustomerId), Encoding.ASCII, cancellationToken).ConfigureAwait(false);
+        await File.WriteAllTextAsync(result.SerialNumberHeader, BuildSerialHeader(cdi.SerialNumber), Encoding.ASCII, cancellationToken).ConfigureAwait(false);
+        return result;
     }
 
     public async Task<ExternalCommandResult> BuildAsync(CancellationToken cancellationToken = default)
@@ -121,6 +133,36 @@ public sealed class FirmwareProvisioningService
     private static void BackupIfPresent(string source, string backupFolder)
     {
         if (File.Exists(source)) File.Copy(source, Path.Combine(backupFolder, Path.GetFileName(source)), overwrite: false);
+    }
+
+    private FirmwarePreparationResult CreatePreparation(string backupIdentity)
+    {
+        var includeFolder = Path.Combine(_firmwareRoot, "Core", "Inc");
+        if (!Directory.Exists(includeFolder)) throw new DirectoryNotFoundException($"Firmware include folder not found: {includeFolder}");
+        var safeIdentity = string.Concat(backupIdentity.Where(char.IsLetterOrDigit));
+        if (string.IsNullOrEmpty(safeIdentity)) safeIdentity = "unknown";
+        var backupFolder = Path.Combine(_firmwareRoot, ".unified-backups", safeIdentity, DateTimeOffset.Now.ToString("yyyyMMdd_HHmmss_fff"));
+        Directory.CreateDirectory(backupFolder);
+        var result = new FirmwarePreparationResult(
+            backupFolder,
+            Path.Combine(includeFolder, "card_public_key.h"),
+            Path.Combine(includeFolder, "customer_id_config.h"),
+            Path.Combine(includeFolder, "serial_number_config.h"));
+        BackupIfPresent(result.PublicKeyHeader, backupFolder);
+        BackupIfPresent(result.CustomerIdHeader, backupFolder);
+        BackupIfPresent(result.SerialNumberHeader, backupFolder);
+        return result;
+    }
+
+    private async Task RestoreRepositoryFileAsync(string repositoryPath, string targetPath, CancellationToken cancellationToken)
+    {
+        if (!Directory.Exists(Path.Combine(_firmwareRoot, ".git")))
+            throw new DirectoryNotFoundException($"Firmware source is not a Git checkout: {_firmwareRoot}");
+        var result = await RunAsync(
+            DefaultGitPath, ["show", $"origin/main:{repositoryPath}"], _firmwareRoot, TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+        if (!result.Succeeded || string.IsNullOrWhiteSpace(result.Output))
+            throw new InvalidOperationException($"Could not load repository default {repositoryPath} from origin/main.{Environment.NewLine}{result.Output}");
+        await File.WriteAllTextAsync(targetPath, result.Output, new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
     }
 
     private static bool ShowsProtectedRdp(string output)
