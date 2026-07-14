@@ -87,7 +87,7 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 - The top session bar always displays the exact 10-digit Customer ID. The bottom status bar adds lifecycle context: default `0000000000` is `UNPROVISIONED`, a generated value is `PENDING FLASH`, and live confirmed readback is `FLASHED`.
 - A dedicated `Verify board` sidebar tab sits above the control/testing workspaces. Its manifest result persists while navigating, appears in the top authorization badge, is revalidated after reconnect, and gates every control action.
 - The public semantic version appears in the native window title, product header, and bottom status bar. A consistent cyan key mark identifies the application in the header/status areas.
-- Phase 1 supports an explicit SWD-only recovery state because a physically blank MCU may not expose Modbus. Default programming is confirmed with `FLASH DEFAULT`; Modbus becomes mandatory only after firmware is present.
+- Phase 1 supports an explicit SWD-only recovery state because a physically blank MCU may not expose Modbus. Default programming uses the live Modbus serial when available, otherwise the deliberate nine-digit fallback `000000000`; Modbus becomes mandatory after firmware is present.
 - The provisioning canvas uses an aligned 290 px target column and flexible action column; control pages use consistent equal-width grids and compact 12/16 px spacing.
 
 ## Decisions Log
@@ -114,3 +114,4 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 | 2026-07-14 | Board verification is global session state | Manifest verification is performed in one dedicated tab, displayed in the top bar, and consumed by both hardware control panels. |
 | 2026-07-14 | Public version and app mark | Operators and support logs can identify the running build without opening file properties; the same restrained key mark anchors title/status identity. |
 | 2026-07-14 | Blank-card default flash bypasses Modbus | A card without application firmware cannot provide COM identity; ST-LINK plus explicit default-flash confirmation is the correct bootstrap trust boundary. |
+| 2026-07-14 | Default-flash confirmation follows identity availability | A valid live serial is the strongest operator confirmation; `000000000` is used only when blank hardware cannot expose Modbus identity. |

@@ -126,8 +126,9 @@ public sealed class FirmwareProvisioningServiceTests
     {
         var service = new FirmwareProvisioningService("missing-root", "missing-cmake", "missing-programmer");
 
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.FlashDefaultAsync("S26050606"));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.FlashDefaultAsync("S26050606", FirmwareProvisioningService.BlankCardFlashConfirmation));
 
-        Assert.Contains(FirmwareProvisioningService.DefaultFlashConfirmation, error.Message);
+        Assert.Contains(FirmwareProvisioningService.BlankCardFlashConfirmation, error.Message);
     }
 }

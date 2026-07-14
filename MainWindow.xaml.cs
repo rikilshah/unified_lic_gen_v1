@@ -1148,9 +1148,10 @@ public sealed partial class MainWindow : Window
             return;
         }
         var confirmation = FlashSerialConfirmation.Text?.Trim() ?? string.Empty;
-        if (!string.Equals(confirmation, FirmwareProvisioningService.DefaultFlashConfirmation, StringComparison.Ordinal))
+        var expectedConfirmation = GetDefaultFlashConfirmation();
+        if (!string.Equals(confirmation, expectedConfirmation, StringComparison.Ordinal))
         {
-            SetStatus($"Type {FirmwareProvisioningService.DefaultFlashConfirmation} to confirm the SWD-only default flash.");
+            SetStatus($"Type {expectedConfirmation} to confirm the default flash.");
             return;
         }
         try
@@ -1166,7 +1167,7 @@ public sealed partial class MainWindow : Window
             AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(51, 43, 55, 70));
             ConnectionDot.Fill = Brush("WarningBrush");
             ConnectionText.Text = "SWD flashing";
-            var flash = await _firmwareProvisioning.FlashDefaultAsync(confirmation);
+            var flash = await _firmwareProvisioning.FlashDefaultAsync(confirmation, expectedConfirmation);
             if (!flash.Succeeded) throw new InvalidOperationException($"STM32CubeProgrammer returned exit code {flash.ExitCode}.");
             _defaultFirmwareFlashSucceeded = true;
             _defaultBaselineVerified = false;
@@ -1297,14 +1298,26 @@ public sealed partial class MainWindow : Window
             return;
         }
         _flashDefaultRequested = true;
-        FlashSummaryText.Text = $"DEFAULT FIRMWARE - SWD ONLY{Environment.NewLine}{Environment.NewLine}Hardware: {_firmwareTarget.DisplayName}{Environment.NewLine}Modbus identity: Not required{Environment.NewLine}Firmware: {_firmwareProvisioning.ElfPath}";
-        FlashSerialConfirmation.Header = $"Type {FirmwareProvisioningService.DefaultFlashConfirmation} to confirm";
+        var expectedConfirmation = GetDefaultFlashConfirmation();
+        var modbusIdentity = _stepperModbus.IsConnected && _stepperIdentity is not null
+            ? $"Serial {_stepperIdentity.SerialNumber}"
+            : "Unavailable - blank-card fallback";
+        FlashSummaryText.Text = $"DEFAULT FIRMWARE{Environment.NewLine}{Environment.NewLine}Hardware: {_firmwareTarget.DisplayName}{Environment.NewLine}Modbus identity: {modbusIdentity}{Environment.NewLine}Confirmation: {expectedConfirmation}{Environment.NewLine}Firmware: {_firmwareProvisioning.ElfPath}";
+        FlashSerialConfirmation.Header = $"Type {expectedConfirmation} to confirm";
         FlashSerialConfirmation.Text = string.Empty;
         FlashAcknowledge.IsChecked = false;
         FlashProgressPanel.Visibility = Visibility.Collapsed;
         FinalFlashButton.IsEnabled = true;
         PositionFlashSummary();
         FlashSummaryPopup.IsOpen = true;
+    }
+
+    private string GetDefaultFlashConfirmation()
+    {
+        if (_stepperModbus.IsConnected && _stepperIdentity is not null &&
+            CustomerIdProvisioningService.IsValidSerial(_stepperIdentity.SerialNumber))
+            return _stepperIdentity.SerialNumber;
+        return FirmwareProvisioningService.BlankCardFlashConfirmation;
     }
 
     private void ShowFlashSummary()
