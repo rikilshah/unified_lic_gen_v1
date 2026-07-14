@@ -46,6 +46,8 @@ public sealed partial class MainWindow : Window
     private bool _publicKeyVerified;
     private bool _flashDefaultRequested;
     private string? _generatedPackageFolder;
+    private int _wizardStep = 1;
+    private ControlTestingWindow? _controlTestingWindow;
 
     public MainWindow()
     {
@@ -280,12 +282,9 @@ public sealed partial class MainWindow : Window
 
     private UIElement BuildMinimalFirmwarePage()
     {
-        var root = Page("Card provisioning", "Read. Create identity. Generate keys. Flash once.");
-        root.Children.Add(RowWith(
-            StepChip("1", "READ", true),
-            StepChip("2", "IDENTITY", false),
-            StepChip("3", "KEYS + STAGE", false),
-            StepChip("4", "FLASH", false)));
+        var root = Page("Card provisioning", "Complete one step at a time.");
+        root.Children.Add(new TextBlock { Name = "WizardStepTitle", Text = "STEP 1 OF 4  /  READ CARD", Foreground = Brush("AccentBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        root.Children.Add(new ProgressBar { Name = "WizardProgress", Minimum = 0, Maximum = 4, Value = 1, Height = 6 });
 
         var target = Card("Target");
         var hardware = new ComboBox { Name = "FirmwareHardwareTarget", Header = "Hardware", SelectedIndex = 0, MinWidth = 280 };
@@ -299,6 +298,7 @@ public sealed partial class MainWindow : Window
         root.Children.Add(target);
 
         var phase1 = Card("1. Read card");
+        phase1.Name = "WizardPhase1";
         phase1.Children.Add(new TextBlock { Name = "Phase1Status", Text = "WAITING - connect and read card", Foreground = Brush("WarningBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
         phase1.Children.Add(RowWith(
             ActionButton("Use detected blank card", (_, _) => AcceptDefaultBaseline(), true),
@@ -307,6 +307,8 @@ public sealed partial class MainWindow : Window
         root.Children.Add(phase1);
 
         var phase2 = Card("2. Create identity");
+        phase2.Name = "WizardPhase2";
+        phase2.Visibility = Visibility.Collapsed;
         phase2.Children.Add(new TextBox { Name = "ProvisioningSerialInput", Header = "Serial number", PlaceholderText = "S26050606", MaxLength = 9, FontFamily = new FontFamily("Cascadia Mono") });
         phase2.Children.Add(new TextBlock { Name = "CustomerIdProvisioningValue", Text = "LOCKED", FontFamily = new FontFamily("Cascadia Mono"), FontSize = 18 });
         phase2.Children.Add(new TextBlock { Name = "Phase2Status", Text = "LOCKED", Foreground = Brush("TextSecondaryBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
@@ -314,14 +316,21 @@ public sealed partial class MainWindow : Window
         root.Children.Add(phase2);
 
         var phase3 = Card("3. Generate files and stage firmware");
+        phase3.Name = "WizardPhase3";
+        phase3.Visibility = Visibility.Collapsed;
         phase3.Children.Add(new TextBlock { Name = "Phase3Status", Text = "LOCKED", Foreground = Brush("TextSecondaryBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
         phase3.Children.Add(ActionButton("Generate package and stage", async (_, _) => await GeneratePackageAndStageFirmwareAsync(), true));
         root.Children.Add(phase3);
 
         var phase4 = Card("4. Review and flash");
+        phase4.Name = "WizardPhase4";
+        phase4.Visibility = Visibility.Collapsed;
         phase4.Children.Add(new TextBlock { Name = "Phase4Status", Text = "LOCKED", Foreground = Brush("TextSecondaryBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
         phase4.Children.Add(ActionButton("Review final flash", (_, _) => ShowFlashSummary(), true));
         root.Children.Add(phase4);
+        root.Children.Add(RowWith(
+            ActionButton("Back", WizardBack_Click),
+            ActionButton("Continue", WizardNext_Click, true)));
         return root;
     }
 
@@ -670,6 +679,51 @@ public sealed partial class MainWindow : Window
     private void CloseSettings_Click(object sender, RoutedEventArgs e) => SettingsPopup.IsOpen = false;
     private void PositionSettingsDrawer() { SettingsPopup.HorizontalOffset = Math.Max(0, Bounds.Width - 444); SettingsPopup.VerticalOffset = 76; }
 
+    private void OpenControlTesting_Click(object sender, RoutedEventArgs e)
+    {
+        if (_controlTestingWindow is null)
+        {
+            _controlTestingWindow = new ControlTestingWindow();
+            _controlTestingWindow.Closed += (_, _) => _controlTestingWindow = null;
+        }
+        _controlTestingWindow.Activate();
+    }
+
+    private void WizardBack_Click(object sender, RoutedEventArgs e) => ShowWizardStep(Math.Max(1, _wizardStep - 1));
+
+    private void WizardNext_Click(object sender, RoutedEventArgs e)
+    {
+        var canAdvance = _wizardStep switch
+        {
+            1 => _defaultBaselineVerified,
+            2 => _customerIdSession is not null && _currentCdiPath is not null,
+            3 => _publicKeyPrepared,
+            _ => false
+        };
+        if (!canAdvance)
+        {
+            SetStatus($"Complete step {_wizardStep} before continuing.");
+            return;
+        }
+        ShowWizardStep(Math.Min(4, _wizardStep + 1));
+    }
+
+    private void ShowWizardStep(int step)
+    {
+        _wizardStep = Math.Clamp(step, 1, 4);
+        for (var index = 1; index <= 4; index++)
+        {
+            if (FindNameInPages<StackPanel>($"WizardPhase{index}") is { } panel)
+                panel.Visibility = index == _wizardStep ? Visibility.Visible : Visibility.Collapsed;
+        }
+        if (FindNameInPages<ProgressBar>("WizardProgress") is { } progress) progress.Value = _wizardStep;
+        if (FindNameInPages<TextBlock>("WizardStepTitle") is { } title)
+        {
+            var labels = new[] { "READ CARD", "CREATE IDENTITY", "GENERATE + STAGE", "REVIEW + FLASH" };
+            title.Text = $"STEP {_wizardStep} OF 4  /  {labels[_wizardStep - 1]}";
+        }
+    }
+
     private async void ConnectButton_Click(object sender, RoutedEventArgs e)
     {
         if (PortBox.SelectedItem is not SerialPortDescriptor selectedPort)
@@ -899,6 +953,7 @@ public sealed partial class MainWindow : Window
             SetPhaseStatus("Phase2Status", $"IDENTITY READY — {_customerIdSession.SerialNumber} / {_customerIdSession.CustomerId}", "AccentBrush");
             AppendFirmwareLog($"Serial {_customerIdSession.SerialNumber} and Customer ID {_customerIdSession.CustomerId} are persisted; retries will reuse both.");
             SetStatus($"Assigned serial {_customerIdSession.SerialNumber} and Customer ID {_customerIdSession.CustomerId} are ready. Generate the key package next.");
+            ShowWizardStep(3);
         }
         catch (Exception ex)
         {
@@ -1012,6 +1067,7 @@ public sealed partial class MainWindow : Window
         SetPhaseStatus("Phase1Status", "COMPLETE — blank default firmware verified", "SuccessBrush");
         SetPhaseStatus("Phase2Status", "READY — enter assigned serial", "AccentBrush");
         SetStatus("Phase 1 complete. Enter the assigned serial in Phase 2.");
+        ShowWizardStep(2);
     }
 
     private async Task PrepareAndBuildDefaultAsync()
@@ -1058,6 +1114,7 @@ public sealed partial class MainWindow : Window
             SetPhaseStatus("Phase1Status", "COMPLETE — repository default flashed and blank verified", "SuccessBrush");
             SetPhaseStatus("Phase2Status", "READY — enter assigned serial", "AccentBrush");
             SetStatus("Phase 1 complete. Default firmware is blank and verified.");
+            ShowWizardStep(2);
         }
         catch (Exception ex)
         {
@@ -1158,6 +1215,7 @@ public sealed partial class MainWindow : Window
             SetPhaseStatus("Phase3Status", "COMPLETE - files saved and firmware staged", "SuccessBrush");
             SetPhaseStatus("Phase4Status", "READY - review final flash", "AccentBrush");
             SetStatus($"Package saved to {_generatedPackageFolder}. Firmware is staged and built.");
+            ShowWizardStep(4);
         }
         catch (Exception ex)
         {
@@ -1181,6 +1239,8 @@ public sealed partial class MainWindow : Window
         FlashSerialConfirmation.Header = "Type the current card serial to confirm";
         FlashSerialConfirmation.Text = string.Empty;
         FlashAcknowledge.IsChecked = false;
+        FlashProgressPanel.Visibility = Visibility.Collapsed;
+        FinalFlashButton.IsEnabled = true;
         PositionFlashSummary();
         FlashSummaryPopup.IsOpen = true;
     }
@@ -1197,28 +1257,65 @@ public sealed partial class MainWindow : Window
         FlashSerialConfirmation.Header = "Type the assigned serial to confirm";
         FlashSerialConfirmation.Text = string.Empty;
         FlashAcknowledge.IsChecked = false;
+        FlashProgressPanel.Visibility = Visibility.Collapsed;
+        FinalFlashButton.IsEnabled = true;
         PositionFlashSummary();
         FlashSummaryPopup.IsOpen = true;
     }
 
     private async void FinalFlash_Click(object sender, RoutedEventArgs e)
     {
-        FlashSummaryPopup.IsOpen = false;
-        if (_flashDefaultRequested)
+        FinalFlashButton.IsEnabled = false;
+        FlashAcknowledge.IsEnabled = false;
+        FlashSerialConfirmation.IsEnabled = false;
+        SetFlashProgress(10, "Validating confirmation...");
+        try
         {
-            await FlashDefaultAndVerifyAsync();
-            return;
+            if (_flashDefaultRequested)
+            {
+                SetFlashProgress(25, "Probing ST-LINK...");
+                FlashProgressBar.IsIndeterminate = true;
+                FlashProgressText.Text = "Programming default firmware and reading the card...";
+                await FlashDefaultAndVerifyAsync();
+                FlashProgressBar.IsIndeterminate = false;
+                SetFlashProgress(_defaultBaselineVerified ? 100 : 0, _defaultBaselineVerified ? "Default firmware verified." : "Default flash failed. Check status.");
+                return;
+            }
+            if (!_publicKeyPrepared || _currentCdi is null)
+            {
+                SetStatus("Final firmware is not ready.");
+                SetFlashProgress(0, "Final firmware is not ready.");
+                return;
+            }
+            SetFlashProgress(25, "Probing ST-LINK...");
+            _stLinkReady = await ProbeForPhaseAsync("FINAL FLASH");
+            if (!_stLinkReady)
+            {
+                SetFlashProgress(0, "ST-LINK probe failed.");
+                return;
+            }
+            FlashProgressBar.IsIndeterminate = true;
+            FlashProgressText.Text = "Programming firmware, reconnecting, and verifying identity...";
+            await FlashAndVerifyAsync();
+            FlashProgressBar.IsIndeterminate = false;
+            _publicKeyVerified = _authorized;
+            SetPhaseStatus("Phase4Status", _publicKeyVerified ? "COMPLETE - flash and verification passed" : "FAILED - verification did not pass", _publicKeyVerified ? "SuccessBrush" : "ErrorBrush");
+            SetFlashProgress(_publicKeyVerified ? 100 : 0, _publicKeyVerified ? "Flash and identity verification complete." : "Verification failed. Check status.");
         }
-        if (!_publicKeyPrepared || _currentCdi is null)
+        finally
         {
-            SetStatus("Final firmware is not ready.");
-            return;
+            FlashProgressBar.IsIndeterminate = false;
+            FinalFlashButton.IsEnabled = true;
+            FlashAcknowledge.IsEnabled = true;
+            FlashSerialConfirmation.IsEnabled = true;
         }
-        _stLinkReady = await ProbeForPhaseAsync("FINAL FLASH");
-        if (!_stLinkReady) return;
-        await FlashAndVerifyAsync();
-        _publicKeyVerified = _authorized;
-        SetPhaseStatus("Phase4Status", _publicKeyVerified ? "COMPLETE - flash and verification passed" : "FAILED - verification did not pass", _publicKeyVerified ? "SuccessBrush" : "ErrorBrush");
+    }
+
+    private void SetFlashProgress(double value, string message)
+    {
+        FlashProgressPanel.Visibility = Visibility.Visible;
+        FlashProgressBar.Value = value;
+        FlashProgressText.Text = message;
     }
 
     private void CloseFlashSummary_Click(object sender, RoutedEventArgs e) => FlashSummaryPopup.IsOpen = false;
@@ -1572,6 +1669,7 @@ public sealed partial class MainWindow : Window
         SetPhaseStatus("Phase2Status", "LOCKED", "TextSecondaryBrush");
         SetPhaseStatus("Phase3Status", "LOCKED", "TextSecondaryBrush");
         SetPhaseStatus("Phase4Status", "LOCKED", "TextSecondaryBrush");
+        ShowWizardStep(1);
     }
 
     private void SetPhaseStatus(string name, string text, string brushKey)

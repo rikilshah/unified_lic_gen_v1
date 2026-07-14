@@ -80,6 +80,10 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 - Legacy dashboard destinations are removed from navigation; production operators see one minimal provisioning workspace and connection settings.
 - Instructions are reduced to short action labels and persistent phase status. Detailed flash information appears only in a centered floating summary at the final decision point.
 - Serial, Customer ID, CDI, keys, manifest, and firmware headers are assembled before one final flash; intermediate identity and key flashes are not part of the workflow.
+- Provisioning uses a one-step-at-a-time wizard: Read Card, Create Identity, Generate + Stage, and Review + Flash. Later steps remain hidden until the prior gate passes; completed steps remain reachable with Back.
+- The flash summary includes visual progress for confirmation, ST-LINK probe, programming/reconnect, and identity verification.
+- Control and testing opens in a separate window so live hardware work cannot clutter or accidentally advance provisioning.
+- The Control & Testing window separates ASM and Stepper with hardware tabs. Each workspace groups live state, related controls, configuration, and its card-specific test suite.
 
 ## Decisions Log
 
@@ -99,3 +103,4 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 | 2026-07-14 | Provisioning is the startup workspace | Opening directly on the numbered four-phase flow removes an extra navigation step and prevents the redesigned workflow from being mistaken for the unchanged overview. |
 | 2026-07-14 | Generate and stage before one final flash | Saving the complete package and building all final headers before programming reduces repeated card restarts and makes the final destructive action reviewable as one transaction. |
 | 2026-07-14 | Floating flash summary | Flash details and confirmation move out of the primary workspace so the normal phase UI remains minimal. |
+| 2026-07-14 | Wizard provisioning and separate testing window | One visible provisioning step reduces scanning load; operational controls and tests move to hardware-specific workspaces in a separate window. |

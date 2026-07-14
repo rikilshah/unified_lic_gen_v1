@@ -20,7 +20,9 @@ ASM firmware source: [rikilshah/VCB240002](https://github.com/rikilshah/VCB24000
 
 Every flash requires a successful build and ST-LINK probe, physical-target acknowledgement, and the exact currently detected card serial. Once Phase 2 flashing starts, the persisted serial/Customer ID pair is final truth and retries reuse it.
 
-The operation log records every stage and the external tool output needed to diagnose a failure.
+The status bar reports failures while the floating flash window shows the current destructive-operation stage.
+
+The operator-facing UI shows one wizard step at a time. During final programming, the floating review window visually reports confirmation, ST-LINK probing, programming/reconnect, and verification instead of exposing a persistent main-page log.
 
 Customer ID generation and recovery are specified in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md).
 

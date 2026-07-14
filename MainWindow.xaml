@@ -32,6 +32,7 @@
                     </Border>
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Spacing="8">
+                    <Button Click="OpenControlTesting_Click" Content="Control &amp; Testing" />
                     <Button Click="SettingsButton_Click" ToolTipService.ToolTip="Connection and application settings">
                         <StackPanel Orientation="Horizontal" Spacing="7"><FontIcon Glyph="&#xE713;" /><TextBlock Text="Settings" /></StackPanel>
                     </Button>
@@ -116,11 +117,15 @@
                         <Button HorizontalAlignment="Right" Click="CloseFlashSummary_Click" Content="Close" />
                     </Grid>
                     <TextBlock x:Name="FlashSummaryText" FontFamily="Cascadia Mono" TextWrapping="Wrap" />
+                    <StackPanel x:Name="FlashProgressPanel" Spacing="6" Visibility="Collapsed">
+                        <ProgressBar x:Name="FlashProgressBar" Minimum="0" Maximum="100" Height="8" />
+                        <TextBlock x:Name="FlashProgressText" Foreground="{StaticResource TextSecondaryBrush}" />
+                    </StackPanel>
                     <CheckBox x:Name="FlashAcknowledge" Content="I verified the connected card and ST-LINK target." />
                     <TextBox x:Name="FlashSerialConfirmation" Header="Type the assigned serial to confirm" FontFamily="Cascadia Mono" />
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
                         <Button Click="CloseFlashSummary_Click" Content="Cancel" />
-                        <Button Click="FinalFlash_Click" Style="{StaticResource PrimaryButtonStyle}" Content="Flash and verify" />
+                        <Button x:Name="FinalFlashButton" Click="FinalFlash_Click" Style="{StaticResource PrimaryButtonStyle}" Content="Flash and verify" />
                     </StackPanel>
                 </StackPanel>
             </Border>
