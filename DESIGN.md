@@ -76,6 +76,7 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 - Firmware provisioning is displayed as four vertically ordered phase cards: Default Baseline, Serial & Customer ID, Public Keys, and Final Verification.
 - Each phase exposes only its relevant actions, displays a persistent status, and gates the next phase on verified device readback.
 - The default-public-key identity flash and generated-public-key flash are separate actions so operators can see exactly when cryptographic identity is introduced.
+- The dashboard opens on the four-phase provisioning workspace rather than the generic overview, and the navigation labels it explicitly so the primary production task is immediately visible.
 
 ## Decisions Log
 
@@ -92,3 +93,4 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 | 2026-07-14 | Unified blank-card provisioning implemented | ASM and Stepper share Customer ID generation, persistence, header staging, flash confirmation, and exact readback while retaining hardware-specific builds. |
 | 2026-07-14 | Operator assigns card serial | Serial and generated Customer ID are persisted as one final-truth pair, flashed together, and both require exact readback. |
 | 2026-07-14 | Four-phase provisioning workflow | A visible, gated sequence separates default recovery, identity assignment, public-key programming, and final read-only verification to reduce operator ambiguity and prevent skipped checks. |
+| 2026-07-14 | Provisioning is the startup workspace | Opening directly on the numbered four-phase flow removes an extra navigation step and prevents the redesigned workflow from being mistaken for the unchanged overview. |

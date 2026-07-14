@@ -51,8 +51,8 @@ public sealed partial class MainWindow : Window
         Title = "Unified Test & Keygen Dashboard";
         AppWindow.Resize(new SizeInt32(1440, 920));
         BuildPages();
-        Navigation.SelectedItem = Navigation.MenuItems[0];
-        ShowPage("overview");
+        SelectNavigation("firmware");
+        ShowPage("firmware");
         PositionSettingsDrawer();
         SizeChanged += (_, _) => PositionSettingsDrawer();
         Navigation.Loaded += async (_, _) => await RefreshPortsAsync(showStatus: false);
@@ -76,7 +76,7 @@ public sealed partial class MainWindow : Window
         var root = Page("Overview", "Connect, provision, authorize and test either supported hardware family from one workspace.");
         var actions = Columns(3);
         actions.Children.Add(MetricCard("1", "Connect & identify", "Select a card profile and establish the Modbus RTU session.", "Open settings", SettingsButton_Click));
-        actions.Children.Add(MetricCard("2", "Provision & authorize", "Generate or load the public manifest and verify four identity checks.", "Open Keygen", (_, _) => SelectNavigation("keygen")));
+        actions.Children.Add(MetricCard("2", "Provision in four phases", "Default firmware, assigned identity, public keys, and final verification.", "Start workflow", (_, _) => SelectNavigation("firmware")));
         actions.Children.Add(MetricCard("3", "Test & report", "Run the card-specific functional suite and retain evidence.", "Open test center", (_, _) => SelectNavigation("tests")));
         root.Children.Add(actions);
 
@@ -204,7 +204,15 @@ public sealed partial class MainWindow : Window
 
     private UIElement BuildFirmwarePage()
     {
-        var root = Page("Firmware provisioning", "Complete four phases in order. Each phase unlocks only after verified card readback.");
+        var root = Page("4-phase card provisioning", "Follow the numbered path from a blank baseline to final card verification. Only the current valid phase can advance.");
+        root.Children.Add(RowWith(
+            StepChip("1", "DEFAULT FIRMWARE", true),
+            new FontIcon { Glyph = "\uE76C", Foreground = Brush("TextSecondaryBrush"), VerticalAlignment = VerticalAlignment.Center },
+            StepChip("2", "SERIAL + CUSTOMER ID", false),
+            new FontIcon { Glyph = "\uE76C", Foreground = Brush("TextSecondaryBrush"), VerticalAlignment = VerticalAlignment.Center },
+            StepChip("3", "PUBLIC KEYS", false),
+            new FontIcon { Glyph = "\uE76C", Foreground = Brush("TextSecondaryBrush"), VerticalAlignment = VerticalAlignment.Center },
+            StepChip("4", "FINAL VERIFY", false)));
         root.Children.Add(new InfoBar
         {
             IsOpen = true,
@@ -213,7 +221,7 @@ public sealed partial class MainWindow : Window
             Message = "Flashing replaces MCU program flash. RDP changes and automatic unlock are never performed. Confirm the physical target and exact serial before continuing."
         });
 
-        var target = Card("Connected target and flash confirmation");
+        var target = Card("Before you start — connect and confirm the physical target");
         var hardware = new ComboBox { Name = "FirmwareHardwareTarget", Header = "Firmware target", SelectedIndex = 0, MinWidth = 280 };
         hardware.Items.Add(new ComboBoxItem { Content = "Stepper Motion Card", Tag = "stepper" });
         hardware.Items.Add(new ComboBoxItem { Content = "ASM I/O Card", Tag = "asm" });

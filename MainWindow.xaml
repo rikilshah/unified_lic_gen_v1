@@ -48,7 +48,7 @@
                 <NavigationViewItem Content="Keygen &amp; provisioning" Tag="keygen"><NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Authorization" Tag="authorization"><NavigationViewItem.Icon><FontIcon Glyph="&#xE785;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Test center" Tag="tests"><NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" /></NavigationViewItem.Icon></NavigationViewItem>
-                <NavigationViewItem Content="Firmware provisioning" Tag="firmware"><NavigationViewItem.Icon><FontIcon Glyph="&#xE896;" /></NavigationViewItem.Icon></NavigationViewItem>
+                <NavigationViewItem Content="4-phase workflow" Tag="firmware"><NavigationViewItem.Icon><FontIcon Glyph="&#xE896;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItemSeparator />
                 <NavigationViewItem Content="ASM controls" Tag="asm"><NavigationViewItem.Icon><FontIcon Glyph="&#xE950;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Stepper controls" Tag="stepper"><NavigationViewItem.Icon><FontIcon Glyph="&#xEC4A;" /></NavigationViewItem.Icon></NavigationViewItem>
