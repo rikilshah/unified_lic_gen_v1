@@ -42,9 +42,10 @@ The minimal dashboard exposes only this workflow. Each phase is gated, and the a
 1. Attempt normal Modbus connection when the card already contains default firmware.
 2. If the live Customer ID is `0000000000`, accept the detected card as the default blank baseline.
 3. If a physically blank card has no Modbus firmware and cannot connect, select its hardware profile and restore `card_public_key.h`, `customer_id_config.h`, and `serial_number_config.h` from the local firmware checkout's `origin/main` without requiring Modbus identity.
-4. Configure and clean-build the selected default firmware and acknowledge the physical ST-LINK target. Enter any serial that follows the selected hardware format: `AYYMMDDSS` for ASM or `SYYMMDDSS` for Stepper. This value confirms the operation; default firmware does not yet persist the assigned production serial.
-5. Probe and flash entirely through SWD. No COM port, serial number, Customer ID, Modbus read, or post-flash Modbus reconnect is required for programmer success.
-6. After SWD programming, connect and identify the newly responsive card through Modbus. Require Customer ID `0000000000` before Phase 2 is enabled.
+4. Configure the selected default firmware and acknowledge the physical ST-LINK target. Enter the serial that shall be installed, using `AYYMMDDSS` for ASM or `SYYMMDDSS` for Stepper.
+5. Immediately before programming, restore the repository-default public key and Customer ID, write the entered value to `APP_SERIAL_NUMBER_TEXT`, and clean-build again so the programmed ELF contains that exact serial.
+6. Probe and flash entirely through SWD. No COM port, prior serial, Customer ID, Modbus read, or post-flash Modbus reconnect is required for programmer success.
+7. After SWD programming, connect and identify the newly responsive card through Modbus. Require the entered serial and Customer ID `0000000000` before Phase 2 is enabled.
 
 ### Phase 2 — Create and Save Identity
 

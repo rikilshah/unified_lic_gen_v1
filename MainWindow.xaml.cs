@@ -1161,6 +1161,13 @@ public sealed partial class MainWindow : Window
         }
         try
         {
+            SetFlashProgress(15, $"Writing serial {confirmation} into default firmware...");
+            await _firmwareProvisioning.PrepareDefaultFirmwareWithSerialAsync(confirmation);
+            SetFlashProgress(25, "Rebuilding default firmware with assigned serial...");
+            var build = await _firmwareProvisioning.BuildAsync();
+            if (!build.Succeeded || !File.Exists(_firmwareProvisioning.ElfPath))
+                throw new InvalidOperationException("Default firmware rebuild with assigned serial failed.");
+
             if (_stepperModbus.IsConnected) await _stepperModbus.DisconnectAsync();
             _connected = false;
             _authorized = false;
@@ -1181,7 +1188,7 @@ public sealed partial class MainWindow : Window
             DisconnectButton.IsEnabled = false;
             UpdateCustomerIdStatus(null);
             SetPhaseStatus("Phase1Status", "DEFAULT FLASHED - connect through Modbus to continue", "SuccessBrush");
-            SetStatus("Default firmware flashed through SWD without Modbus. Connect and identify the card to continue.");
+            SetStatus($"Default firmware with serial {confirmation} flashed through SWD. Connect and identify the card to continue.");
         }
         catch (Exception ex)
         {

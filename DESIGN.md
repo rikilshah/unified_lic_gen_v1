@@ -89,6 +89,7 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 - The public semantic version appears in the native window title, product header, and bottom status bar. A consistent cyan key mark identifies the application in the header/status areas.
 - Phase 1 supports an explicit SWD-only recovery state because a physically blank MCU may not expose Modbus. The operator may confirm with any correctly formatted serial for the selected hardware; Modbus becomes mandatory after firmware is present.
 - Automatic hardware detection uses the live serial prefix because both current firmware repositories report product code `1`: `A` selects ASM and `S` selects Stepper. Unknown prefixes require explicit operator selection.
+- The serial entered for a blank/default flash is not merely confirmation: the dashboard writes it into `serial_number_config.h`, rebuilds, and only then programs the ELF.
 - The provisioning canvas uses an aligned 290 px target column and flexible action column; control pages use consistent equal-width grids and compact 12/16 px spacing.
 
 ## Decisions Log
@@ -117,3 +118,4 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 | 2026-07-14 | Blank-card default flash bypasses Modbus | A card without application firmware cannot provide COM identity; ST-LINK plus explicit default-flash confirmation is the correct bootstrap trust boundary. |
 | 2026-07-14 | Blank default flash accepts a formatted operator serial | Phase 1 validates `AYYMMDDSS`/`SYYMMDDSS` format and hardware prefix without pretending the blank target already owns that identity. |
 | 2026-07-14 | Auto-detection uses serial prefix | ASM and Stepper both report product code `1`; their established `A` and `S` serial namespaces provide the available stable discriminator. |
+| 2026-07-14 | Default-flash serial is embedded before programming | Rebuilding after operator entry guarantees Modbus readback reflects the selected serial instead of a stale repository default. |

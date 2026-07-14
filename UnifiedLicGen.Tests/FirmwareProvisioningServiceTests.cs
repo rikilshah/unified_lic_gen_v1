@@ -72,6 +72,11 @@ public sealed class FirmwareProvisioningServiceTests
             await service.PrepareRepositoryDefaultsAsync("OLD000001");
             Assert.Equal("repository-default-key", (await File.ReadAllTextAsync(Path.Combine(include, "card_public_key.h"))).Trim());
 
+            await service.PrepareDefaultFirmwareWithSerialAsync("A26050605");
+            Assert.Equal("repository-default-key", (await File.ReadAllTextAsync(Path.Combine(include, "card_public_key.h"))).Trim());
+            Assert.Equal("repository-default-customer", (await File.ReadAllTextAsync(Path.Combine(include, "customer_id_config.h"))).Trim());
+            Assert.Contains("APP_SERIAL_NUMBER_TEXT \"A26050605\"", await File.ReadAllTextAsync(Path.Combine(include, "serial_number_config.h")));
+
             var cdi = new CardIdentityCdi { SerialNumber = "S26050606", DeviceId = "003B00214830530720383253", CustomerId = "3792822696" };
             await service.PrepareAssignedIdentityHeadersAsync(cdi);
             Assert.Equal("repository-default-key", (await File.ReadAllTextAsync(Path.Combine(include, "card_public_key.h"))).Trim());

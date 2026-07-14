@@ -74,6 +74,23 @@ public sealed class FirmwareProvisioningService
         return result;
     }
 
+    public async Task<FirmwarePreparationResult> PrepareDefaultFirmwareWithSerialAsync(
+        string serialNumber,
+        CancellationToken cancellationToken = default)
+    {
+        serialNumber = serialNumber.Trim().ToUpperInvariant();
+        if (serialNumber is not { Length: 9 } || !char.IsLetter(serialNumber[0]) || !serialNumber[1..].All(char.IsDigit))
+            throw new InvalidDataException("Default firmware serial must use XYYMMDDSS format.");
+        if (Profile is not null && serialNumber[0] != Profile.SerialPrefix)
+            throw new InvalidDataException($"{Profile.DisplayName} serial must begin with {Profile.SerialPrefix}.");
+
+        var result = CreatePreparation(serialNumber);
+        await RestoreRepositoryFileAsync("Core/Inc/card_public_key.h", result.PublicKeyHeader, cancellationToken).ConfigureAwait(false);
+        await RestoreRepositoryFileAsync("Core/Inc/customer_id_config.h", result.CustomerIdHeader, cancellationToken).ConfigureAwait(false);
+        await File.WriteAllTextAsync(result.SerialNumberHeader, BuildSerialHeader(serialNumber), Encoding.ASCII, cancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
     public async Task<FirmwarePreparationResult> PrepareAssignedIdentityHeadersAsync(
         CardIdentityCdi cdi,
         CancellationToken cancellationToken = default)

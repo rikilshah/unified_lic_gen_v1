@@ -8,7 +8,7 @@ Provisioning phases, ASM controls, Stepper controls, and Test Center are organiz
 
 The exact 10-digit Customer ID and manifest-verification state remain visible globally. Use the dedicated **Verify board** tab before operating either control panel.
 
-Current public version: **1.0.1**. It is shown in the window title, application header, status bar, and executable metadata.
+Current public version: **1.0.2**. It is shown in the window title, application header, status bar, and executable metadata.
 
 ## Standalone publishing
 

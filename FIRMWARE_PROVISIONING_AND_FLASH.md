@@ -13,7 +13,7 @@ ASM firmware source: [rikilshah/VCB240002](https://github.com/rikilshah/VCB24000
 ## Operator Workflow
 
 1. Select the correct hardware profile, connect, and open **Firmware provisioning**. The target remains locked to the detected card family.
-2. **Phase 1 — Default baseline:** accept a connected card already reporting Customer ID `0000000000`. Restore and build default firmware when programming is needed. Confirm with any valid serial matching the selected hardware (`AYYMMDDSS` or `SYYMMDDSS`). Connect after programming and require blank readback before identity creation.
+2. **Phase 1 — Default baseline:** accept a connected card already reporting Customer ID `0000000000`. For default programming, enter the serial to install (`AYYMMDDSS` or `SYYMMDDSS`). The dashboard restores default key/Customer ID headers, writes that exact serial header, rebuilds, and flashes the resulting ELF. Connect afterward and require matching serial plus blank Customer ID readback.
 3. **Phase 2 — Identity:** enter the assigned serial, generate or recover its Customer ID, and save CDI JSON under the serial target folder. Nothing is flashed.
 4. **Phase 3 — Keys and staging:** generate the complete P-256 package from CDI, including the sensitive private-key PEM, save all outputs under `lic_files`, stage all final identity headers, and clean-build. Nothing is flashed.
 5. **Phase 4 — Final flash:** review the floating summary, confirm the target, flash the one final image, reconnect, and verify the complete live identity against the persisted pair and generated manifest.
@@ -49,7 +49,7 @@ Defaults:
 ## Safety Gates
 
 - Phase 1 preparation requires a synchronized local `origin/main`; it does not invent default header values.
-- Phase 1 default flashing requires the selected hardware profile, built default ELF, successful ST-LINK/RDP probe, physical-target acknowledgement, and any correctly formatted serial with the selected hardware's `A` or `S` prefix.
+- Phase 1 default flashing requires the selected hardware profile, successful ST-LINK/RDP probe, physical-target acknowledgement, and a correctly formatted serial. The flash action stages that serial and rebuilds immediately before programming to prevent stale repository serials.
 - A generated CDI and manifest package must exist before Phase 3 public-key preparation.
 - Preparation, clean build, and ST-LINK probe must succeed in the current session.
 - The operator must acknowledge the physical target warning.
