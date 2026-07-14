@@ -6,6 +6,16 @@ Provisioning phases, ASM controls, Stepper controls, and Test Center are organiz
 
 The exact 10-digit Customer ID and manifest-verification state remain visible globally. Use the dedicated **Verify board** tab before operating either control panel.
 
+Current public version: **1.0.0**. It is shown in the window title, application header, status bar, and executable metadata.
+
+## Standalone publishing
+
+```powershell
+dotnet publish UnifiedLicGen.csproj -p:PublishProfile=win-x64
+```
+
+Distribute the complete `artifacts\publish\win-x64` folder. See [PUBLISHING.md](PUBLISHING.md) for ZIP creation, prerequisites, versioning, and release verification.
+
 ## Documentation
 
 - [Design system and UX rules](DESIGN.md)

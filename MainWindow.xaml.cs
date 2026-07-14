@@ -14,6 +14,15 @@ namespace UnifiedLicGen;
 
 public sealed partial class MainWindow : Window
 {
+    public static string DisplayVersion
+    {
+        get
+        {
+            var version = typeof(MainWindow).Assembly.GetName().Version ?? new Version(1, 0, 0);
+            return $"{version.Major}.{version.Minor}.{version.Build}";
+        }
+    }
+
     private readonly Dictionary<string, UIElement> _pages = new();
     private bool _connected;
     private bool _authorized;
@@ -51,7 +60,9 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Title = "Unified Test & Keygen Dashboard";
+        Title = $"◆ Unified Test & Keygen Dashboard  v{DisplayVersion}";
+        HeaderVersionText.Text = $"TEST • AUTH • PROVISION  /  v{DisplayVersion}";
+        StatusVersionText.Text = $"UnifiedLicGen  v{DisplayVersion}";
         AppWindow.Resize(new SizeInt32(1280, 800));
         BuildPages();
         Navigation.SelectedItem = Navigation.MenuItems[0];

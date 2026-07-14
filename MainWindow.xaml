@@ -17,8 +17,11 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel VerticalAlignment="Center" Spacing="1">
-                    <TextBlock FontSize="17" FontWeight="SemiBold" Text="UNIFIED CONTROL" />
-                    <TextBlock Style="{StaticResource SecondaryTextStyle}" FontSize="11" Text="TEST • AUTH • PROVISION" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE72E;" FontSize="16" Foreground="{StaticResource AccentBrush}" />
+                        <TextBlock FontSize="17" FontWeight="SemiBold" Text="UNIFIED CONTROL" />
+                    </StackPanel>
+                    <TextBlock x:Name="HeaderVersionText" Style="{StaticResource SecondaryTextStyle}" FontSize="11" Text="TEST • AUTH • PROVISION" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="18">
                     <StackPanel Orientation="Horizontal" Spacing="7">
@@ -67,7 +70,10 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                 <TextBlock x:Name="StatusText" VerticalAlignment="Center" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" Text="Ready. Select a hardware profile or connect a device." TextTrimming="CharacterEllipsis" />
                 <TextBlock x:Name="CustomerIdStatusText" Grid.Column="1" VerticalAlignment="Center" FontSize="12" FontFamily="Cascadia Mono" FontWeight="SemiBold" Foreground="{StaticResource WarningBrush}" Text="CUST ID  0000000000  /  UNPROVISIONED" />
-                <TextBlock Grid.Column="2" VerticalAlignment="Center" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Text="UnifiedLicGen • Material Dark" />
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Spacing="6">
+                    <FontIcon Glyph="&#xE72E;" FontSize="11" Foreground="{StaticResource AccentBrush}" />
+                    <TextBlock x:Name="StatusVersionText" VerticalAlignment="Center" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Text="UnifiedLicGen" />
+                </StackPanel>
             </Grid>
         </Border>
 
