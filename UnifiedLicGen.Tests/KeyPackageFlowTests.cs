@@ -7,6 +7,32 @@ namespace UnifiedLicGen.Tests;
 public sealed class KeyPackageFlowTests
 {
     [Fact]
+    public async Task ExportPackageAsync_WritesPrivateKeyWhenCompletePackageIsRequested()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"UnifiedLicGen-Key-{Guid.NewGuid():N}");
+        try
+        {
+            var identity = new DeviceIdentity("A26050605", "A26050605", "003B00214830530720383253", "3792822696");
+            var key = KeyPackageService.GenerateKeyPackage();
+            var result = await KeyPackageService.ExportPackageAsync(
+                root,
+                identity,
+                key,
+                new ManifestExportOptions("VCB240002 ASM I/O Card", "PRODUCTION", "PRODUCTION", true));
+
+            var privateKeyPath = Path.Combine(result, "A26050605_app_privkey_sensitive.pem");
+            Assert.True(File.Exists(privateKeyPath));
+            Assert.Contains("BEGIN PRIVATE KEY", await File.ReadAllTextAsync(privateKeyPath));
+            Assert.True(File.Exists(Path.Combine(result, "card_public_key.h")));
+            Assert.True(File.Exists(Path.Combine(result, "A26050605_manifest.json")));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ExportPackageAsync_WritesCompleteLicFilesPackageWithoutPrivateKeyByDefault()
     {
         var root = Path.Combine(Path.GetTempPath(), $"UnifiedLicGen-Key-{Guid.NewGuid():N}");

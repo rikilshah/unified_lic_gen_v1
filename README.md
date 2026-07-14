@@ -1,6 +1,6 @@
 # Unified Test & Keygen Dashboard
 
-Windows dashboard for CDI capture, operator-assigned blank-card serials, Customer ID generation, P-256 key generation, manifest authorization, ASM and Stepper diagnostics, and guarded four-phase firmware provisioning from default baseline through final verification.
+Minimal Windows workflow for reading blank ASM or Stepper cards, assigning identity, generating the complete P-256 package, staging firmware, and performing one guarded final flash with readback verification.
 
 ## Documentation
 

@@ -44,6 +44,8 @@ public sealed partial class MainWindow : Window
     private bool _assignedIdentityVerified;
     private bool _publicKeyPrepared;
     private bool _publicKeyVerified;
+    private bool _flashDefaultRequested;
+    private string? _generatedPackageFolder;
 
     public MainWindow()
     {
@@ -51,7 +53,6 @@ public sealed partial class MainWindow : Window
         Title = "Unified Test & Keygen Dashboard";
         AppWindow.Resize(new SizeInt32(1440, 920));
         BuildPages();
-        SelectNavigation("firmware");
         ShowPage("firmware");
         PositionSettingsDrawer();
         SizeChanged += (_, _) => PositionSettingsDrawer();
@@ -60,15 +61,7 @@ public sealed partial class MainWindow : Window
 
     private void BuildPages()
     {
-        _pages["overview"] = BuildOverviewPage();
-        _pages["identity"] = BuildIdentityPage();
-        _pages["keygen"] = BuildKeygenPage();
-        _pages["authorization"] = BuildAuthorizationPage();
-        _pages["tests"] = BuildTestsPage();
-        _pages["firmware"] = BuildFirmwarePage();
-        _pages["asm"] = BuildAsmPage();
-        _pages["stepper"] = BuildStepperPage();
-        _pages["reports"] = BuildReportsPage();
+        _pages["firmware"] = BuildMinimalFirmwarePage();
     }
 
     private UIElement BuildOverviewPage()
@@ -282,6 +275,53 @@ public sealed partial class MainWindow : Window
             Text = "No firmware operation started."
         };
         root.Children.Add(log);
+        return root;
+    }
+
+    private UIElement BuildMinimalFirmwarePage()
+    {
+        var root = Page("Card provisioning", "Read. Create identity. Generate keys. Flash once.");
+        root.Children.Add(RowWith(
+            StepChip("1", "READ", true),
+            StepChip("2", "IDENTITY", false),
+            StepChip("3", "KEYS + STAGE", false),
+            StepChip("4", "FLASH", false)));
+
+        var target = Card("Target");
+        var hardware = new ComboBox { Name = "FirmwareHardwareTarget", Header = "Hardware", SelectedIndex = 0, MinWidth = 280 };
+        hardware.Items.Add(new ComboBoxItem { Content = "Stepper Motion Card", Tag = "stepper" });
+        hardware.Items.Add(new ComboBoxItem { Content = "ASM I/O Card", Tag = "asm" });
+        hardware.SelectionChanged += FirmwareTarget_SelectionChanged;
+        target.Children.Add(RowWith(hardware, ActionButton("Connection settings", SettingsButton_Click, true)));
+        target.Children.Add(new TextBlock { Name = "FirmwareRepository", Text = _firmwareTarget.RepositoryUrl, Visibility = Visibility.Collapsed });
+        target.Children.Add(new TextBlock { Name = "FirmwareSource", Text = _firmwareTarget.LocalRoot, Visibility = Visibility.Collapsed });
+        target.Children.Add(new TextBlock { Name = "FirmwareBuildOutput", Text = _firmwareProvisioning.ElfPath, Visibility = Visibility.Collapsed });
+        root.Children.Add(target);
+
+        var phase1 = Card("1. Read card");
+        phase1.Children.Add(new TextBlock { Name = "Phase1Status", Text = "WAITING - connect and read card", Foreground = Brush("WarningBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        phase1.Children.Add(RowWith(
+            ActionButton("Use detected blank card", (_, _) => AcceptDefaultBaseline(), true),
+            ActionButton("Prepare default firmware", async (_, _) => await PrepareAndBuildDefaultAsync()),
+            ActionButton("Flash default firmware", (_, _) => ShowDefaultFlashSummary())));
+        root.Children.Add(phase1);
+
+        var phase2 = Card("2. Create identity");
+        phase2.Children.Add(new TextBox { Name = "ProvisioningSerialInput", Header = "Serial number", PlaceholderText = "S26050606", MaxLength = 9, FontFamily = new FontFamily("Cascadia Mono") });
+        phase2.Children.Add(new TextBlock { Name = "CustomerIdProvisioningValue", Text = "LOCKED", FontFamily = new FontFamily("Cascadia Mono"), FontSize = 18 });
+        phase2.Children.Add(new TextBlock { Name = "Phase2Status", Text = "LOCKED", Foreground = Brush("TextSecondaryBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        phase2.Children.Add(ActionButton("Generate Customer ID and CDI", async (_, _) => await PrepareBlankCustomerIdAsync(), true));
+        root.Children.Add(phase2);
+
+        var phase3 = Card("3. Generate files and stage firmware");
+        phase3.Children.Add(new TextBlock { Name = "Phase3Status", Text = "LOCKED", Foreground = Brush("TextSecondaryBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        phase3.Children.Add(ActionButton("Generate package and stage", async (_, _) => await GeneratePackageAndStageFirmwareAsync(), true));
+        root.Children.Add(phase3);
+
+        var phase4 = Card("4. Review and flash");
+        phase4.Children.Add(new TextBlock { Name = "Phase4Status", Text = "LOCKED", Foreground = Brush("TextSecondaryBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        phase4.Children.Add(ActionButton("Review final flash", (_, _) => ShowFlashSummary(), true));
+        root.Children.Add(phase4);
         return root;
     }
 
@@ -597,7 +637,8 @@ public sealed partial class MainWindow : Window
 
     private void SetAuthCheck(string name, bool passed)
     {
-        var text = FindNameInPages<TextBlock>(name)!;
+        var text = FindNameInPages<TextBlock>(name);
+        if (text is null) return;
         text.Text = passed ? "PASS" : "FAIL";
         text.Foreground = passed ? Brush("SuccessBrush") : Brush("ErrorBrush");
     }
@@ -718,7 +759,7 @@ public sealed partial class MainWindow : Window
             SettingsPopup.IsOpen = false;
             var blankNotice = _stepperIdentity.CustomerId10 == "0000000000" ? " Blank card: assigned serial is required before Customer ID generation." : string.Empty;
             SetStatus($"{_firmwareTarget.DisplayName} read through {selectedPort.DisplayName}, slave {slave}. Identity registers are available.{cdiResult}{blankNotice}");
-            SelectNavigation("identity");
+            SelectNavigation("firmware");
         }
         catch (Exception ex)
         {
@@ -849,6 +890,7 @@ public sealed partial class MainWindow : Window
                 throw new InvalidDataException($"Recovered session requires assigned serial {_customerIdSession.SerialNumber}.");
             ApplyStepperIdentity(_stepperIdentity, _customerIdSession.CustomerId, _customerIdSession.SerialNumber);
             _currentCdiPath = await _cdiStorage.SaveToDatabaseAsync(_currentCdi!);
+            SetPhaseStatus("Phase3Status", "READY - generate files and stage firmware", "AccentBrush");
             SerialText.Text = $"SERIAL {_customerIdSession.SerialNumber} (PENDING)";
             _assignedIdentityPrepared = false;
             _assignedIdentityVerified = false;
@@ -874,16 +916,16 @@ public sealed partial class MainWindow : Window
             DeviceId = identity.DeviceId96,
             CustomerId = effectiveCustomerId
         };
-        FindNameInPages<TextBlock>("IdentitySerial")!.Text = serialOverride is null ? effectiveSerial : $"{effectiveSerial} (pending first flash)";
-        FindNameInPages<TextBlock>("IdentityFirmware")!.Text = identity.FirmwareVersion;
-        FindNameInPages<TextBlock>("IdentityProduct")!.Text = $"Code {identity.ProductCode} / HW {identity.HardwareRevision}";
-        FindNameInPages<TextBox>("IdentityUid")!.Text = identity.DeviceId96;
-        FindNameInPages<TextBox>("IdentityCustomer")!.Text = customerIdOverride is null ? effectiveCustomerId : $"{effectiveCustomerId} (pending first flash)";
-        FindNameInPages<TextBox>("IdentityFingerprint")!.Text = identity.PublicKeyFingerprintSha256;
-        FindNameInPages<TextBox>("IdentityRawKey")!.Text = identity.PublicKeyRawHex;
-        FindNameInPages<TextBox>("KeySerial")!.Text = _currentCdi.SerialNumber;
-        FindNameInPages<TextBox>("KeyDeviceId")!.Text = _currentCdi.DeviceId;
-        FindNameInPages<TextBox>("KeyCustomerId")!.Text = _currentCdi.CustomerId;
+        if (FindNameInPages<TextBlock>("IdentitySerial") is { } serial) serial.Text = serialOverride is null ? effectiveSerial : $"{effectiveSerial} (pending first flash)";
+        if (FindNameInPages<TextBlock>("IdentityFirmware") is { } firmware) firmware.Text = identity.FirmwareVersion;
+        if (FindNameInPages<TextBlock>("IdentityProduct") is { } product) product.Text = $"Code {identity.ProductCode} / HW {identity.HardwareRevision}";
+        if (FindNameInPages<TextBox>("IdentityUid") is { } uid) uid.Text = identity.DeviceId96;
+        if (FindNameInPages<TextBox>("IdentityCustomer") is { } customer) customer.Text = customerIdOverride is null ? effectiveCustomerId : $"{effectiveCustomerId} (pending first flash)";
+        if (FindNameInPages<TextBox>("IdentityFingerprint") is { } fingerprint) fingerprint.Text = identity.PublicKeyFingerprintSha256;
+        if (FindNameInPages<TextBox>("IdentityRawKey") is { } rawKey) rawKey.Text = identity.PublicKeyRawHex;
+        if (FindNameInPages<TextBox>("KeySerial") is { } keySerial) keySerial.Text = _currentCdi.SerialNumber;
+        if (FindNameInPages<TextBox>("KeyDeviceId") is { } keyDevice) keyDevice.Text = _currentCdi.DeviceId;
+        if (FindNameInPages<TextBox>("KeyCustomerId") is { } keyCustomer) keyCustomer.Text = _currentCdi.CustomerId;
         var provisioningValue = FindNameInPages<TextBlock>("CustomerIdProvisioningValue");
         if (provisioningValue is not null) provisioningValue.Text = customerIdOverride is null ? effectiveCustomerId : $"{effectiveSerial}  /  {effectiveCustomerId}  •  PENDING FLASH";
     }
@@ -924,14 +966,14 @@ public sealed partial class MainWindow : Window
     private async Task RefreshStepperLiveStatusAsync()
     {
         var status = await _stepperModbus.ReadLiveStatusAsync();
-        FindNameInPages<TextBlock>("StepperPosition")!.Text = status.Position.ToString();
-        FindNameInPages<TextBlock>("StepperCommand")!.Text = status.ActiveCommand.ToString();
-        FindNameInPages<TextBlock>("StepperFault")!.Text = status.Fault.ToString();
+        if (FindNameInPages<TextBlock>("StepperPosition") is { } position) position.Text = status.Position.ToString();
+        if (FindNameInPages<TextBlock>("StepperCommand") is { } command) command.Text = status.ActiveCommand.ToString();
+        if (FindNameInPages<TextBlock>("StepperFault") is { } fault) fault.Text = status.Fault.ToString();
         var states = new List<string>();
         if ((status.Status & 0x0001) != 0) states.Add("Busy");
         if ((status.Status & 0x0002) != 0) states.Add("Jogging");
         if ((status.Status & 0x0008) != 0) states.Add("Homing");
-        FindNameInPages<TextBlock>("StepperState")!.Text = states.Count == 0 ? "Idle" : string.Join(" | ", states);
+        if (FindNameInPages<TextBlock>("StepperState") is { } state) state.Text = states.Count == 0 ? "Idle" : string.Join(" | ", states);
     }
 
     private async Task ReadStepperRegistersAsync()
@@ -1079,6 +1121,114 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async Task GeneratePackageAndStageFirmwareAsync()
+    {
+        if (!_defaultBaselineVerified || _customerIdSession is null || _currentCdi is null)
+        {
+            SetStatus("Complete card read and identity generation first.");
+            return;
+        }
+
+        try
+        {
+            SetPhaseStatus("Phase3Status", "WORKING - generating package", "WarningBrush");
+            _generatedKeyPackage = KeyPackageService.GenerateKeyPackage();
+            _rawPublicKey = _generatedKeyPackage.RawPublicKeyHex;
+            _sec1PublicKey = _generatedKeyPackage.Sec1PublicKeyHex;
+            _fingerprint = _generatedKeyPackage.FingerprintFullHex;
+
+            _currentCdiPath = await _cdiStorage.SaveToDatabaseAsync(_currentCdi);
+            var cardFolder = Path.Combine(CdiStorageService.DefaultDatabaseRoot, _currentCdi.SerialNumber);
+            var identity = KeyPackageService.ParseIdentityJson(await File.ReadAllTextAsync(_currentCdiPath));
+            var product = _firmwareTarget.Id == "asm" ? "VCB240002 ASM I/O Card" : "Stepper Control Card V2";
+            _generatedPackageFolder = await KeyPackageService.ExportPackageAsync(
+                cardFolder,
+                identity,
+                _generatedKeyPackage,
+                new ManifestExportOptions(product, "PRODUCTION", "PRODUCTION", IncludePrivateKey: true));
+
+            var publicKeyHeader = Path.Combine(_generatedPackageFolder, "card_public_key.h");
+            await _firmwareProvisioning.PrepareIdentityHeadersAsync(_currentCdi, publicKeyHeader);
+            _publicKeyPrepared = await BuildForPhaseAsync("FINAL staged firmware");
+            _firmwarePrepared = _publicKeyPrepared;
+            _firmwareBuilt = _publicKeyPrepared;
+            _loadedManifestPath = Path.Combine(_generatedPackageFolder, $"{_currentCdi.SerialNumber}_manifest.json");
+            _loadedManifest = await _manifestService.LoadAsync(_loadedManifestPath);
+
+            SetPhaseStatus("Phase3Status", "COMPLETE - files saved and firmware staged", "SuccessBrush");
+            SetPhaseStatus("Phase4Status", "READY - review final flash", "AccentBrush");
+            SetStatus($"Package saved to {_generatedPackageFolder}. Firmware is staged and built.");
+        }
+        catch (Exception ex)
+        {
+            _publicKeyPrepared = false;
+            _firmwarePrepared = false;
+            _firmwareBuilt = false;
+            SetPhaseStatus("Phase3Status", "FAILED - package or staging error", "ErrorBrush");
+            SetStatus($"Package generation or firmware staging failed: {ex.Message}");
+        }
+    }
+
+    private void ShowDefaultFlashSummary()
+    {
+        if (!_defaultFirmwareBuilt || _stepperIdentity is null)
+        {
+            SetStatus("Prepare default firmware before flashing it.");
+            return;
+        }
+        _flashDefaultRequested = true;
+        FlashSummaryText.Text = $"DEFAULT FIRMWARE{Environment.NewLine}{Environment.NewLine}Hardware: {_firmwareTarget.DisplayName}{Environment.NewLine}Current card: {_stepperIdentity.SerialNumber}{Environment.NewLine}Firmware: {_firmwareProvisioning.ElfPath}";
+        FlashSerialConfirmation.Header = "Type the current card serial to confirm";
+        FlashSerialConfirmation.Text = string.Empty;
+        FlashAcknowledge.IsChecked = false;
+        PositionFlashSummary();
+        FlashSummaryPopup.IsOpen = true;
+    }
+
+    private void ShowFlashSummary()
+    {
+        if (!_publicKeyPrepared || _currentCdi is null || string.IsNullOrWhiteSpace(_generatedPackageFolder))
+        {
+            SetStatus("Generate the package and stage firmware before final flash.");
+            return;
+        }
+        _flashDefaultRequested = false;
+        FlashSummaryText.Text = $"Hardware: {_firmwareTarget.DisplayName}{Environment.NewLine}Serial: {_currentCdi.SerialNumber}{Environment.NewLine}Customer ID: {_currentCdi.CustomerId}{Environment.NewLine}Fingerprint: {_fingerprint}{Environment.NewLine}Package: {_generatedPackageFolder}{Environment.NewLine}Firmware: {_firmwareProvisioning.ElfPath}";
+        FlashSerialConfirmation.Header = "Type the assigned serial to confirm";
+        FlashSerialConfirmation.Text = string.Empty;
+        FlashAcknowledge.IsChecked = false;
+        PositionFlashSummary();
+        FlashSummaryPopup.IsOpen = true;
+    }
+
+    private async void FinalFlash_Click(object sender, RoutedEventArgs e)
+    {
+        FlashSummaryPopup.IsOpen = false;
+        if (_flashDefaultRequested)
+        {
+            await FlashDefaultAndVerifyAsync();
+            return;
+        }
+        if (!_publicKeyPrepared || _currentCdi is null)
+        {
+            SetStatus("Final firmware is not ready.");
+            return;
+        }
+        _stLinkReady = await ProbeForPhaseAsync("FINAL FLASH");
+        if (!_stLinkReady) return;
+        await FlashAndVerifyAsync();
+        _publicKeyVerified = _authorized;
+        SetPhaseStatus("Phase4Status", _publicKeyVerified ? "COMPLETE - flash and verification passed" : "FAILED - verification did not pass", _publicKeyVerified ? "SuccessBrush" : "ErrorBrush");
+    }
+
+    private void CloseFlashSummary_Click(object sender, RoutedEventArgs e) => FlashSummaryPopup.IsOpen = false;
+
+    private void PositionFlashSummary()
+    {
+        FlashSummaryPopup.HorizontalOffset = Math.Max(24, (Bounds.Width - 520) / 2);
+        FlashSummaryPopup.VerticalOffset = Math.Max(76, (Bounds.Height - 480) / 2);
+    }
+
     private async Task PrepareAndBuildPublicKeysAsync()
     {
         if (!_assignedIdentityVerified || _currentCdi is null)
@@ -1185,12 +1335,12 @@ public sealed partial class MainWindow : Window
 
     private bool VerifyFlashConfirmation(string expectedSerial)
     {
-        if (FindNameInPages<CheckBox>("FlashAcknowledge")?.IsChecked != true)
+        if (FlashAcknowledge.IsChecked != true)
         {
             SetStatus("Acknowledge the live-device warning before flashing.");
             return false;
         }
-        var confirmation = CustomerIdProvisioningService.NormalizeSerial(FindNameInPages<TextBox>("FlashSerialConfirmation")?.Text);
+        var confirmation = CustomerIdProvisioningService.NormalizeSerial(FlashSerialConfirmation.Text);
         if (!string.Equals(confirmation, expectedSerial, StringComparison.Ordinal))
         {
             SetStatus($"Type exact serial {expectedSerial} in the flash confirmation field.");
@@ -1320,13 +1470,13 @@ public sealed partial class MainWindow : Window
             SetStatus("Complete Prepare, Build, and Detect Target successfully before flashing.");
             return;
         }
-        if (FindNameInPages<CheckBox>("FlashAcknowledge")?.IsChecked != true)
+        if (FlashAcknowledge.IsChecked != true)
         {
             SetStatus("Acknowledge the live-device flashing warning before continuing.");
             return;
         }
 
-        var confirmation = FindNameInPages<TextBox>("FlashSerialConfirmation")?.Text ?? string.Empty;
+        var confirmation = FlashSerialConfirmation.Text ?? string.Empty;
         if (!string.Equals(confirmation.Trim(), _currentCdi.SerialNumber, StringComparison.Ordinal))
         {
             SetStatus($"Type the exact serial {_currentCdi.SerialNumber} to confirm the flash target.");
@@ -1417,6 +1567,7 @@ public sealed partial class MainWindow : Window
         _assignedIdentityVerified = false;
         _publicKeyPrepared = false;
         _publicKeyVerified = false;
+        _generatedPackageFolder = null;
         SetPhaseStatus("Phase1Status", "WAITING — connect and read card", "WarningBrush");
         SetPhaseStatus("Phase2Status", "LOCKED", "TextSecondaryBrush");
         SetPhaseStatus("Phase3Status", "LOCKED", "TextSecondaryBrush");

@@ -40,20 +40,9 @@
             </Grid>
         </Border>
 
-        <NavigationView x:Name="Navigation" Grid.Row="1" PaneDisplayMode="Left" IsBackButtonVisible="Collapsed" IsSettingsVisible="False"
-                        OpenPaneLength="252" Background="{StaticResource CanvasBrush}" SelectionChanged="Navigation_SelectionChanged">
-            <NavigationView.MenuItems>
-                <NavigationViewItem Content="Overview" Tag="overview" Icon="Home" />
-                <NavigationViewItem Content="Device identity" Tag="identity"><NavigationViewItem.Icon><FontIcon Glyph="&#xE77B;" /></NavigationViewItem.Icon></NavigationViewItem>
-                <NavigationViewItem Content="Keygen &amp; provisioning" Tag="keygen"><NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon></NavigationViewItem>
-                <NavigationViewItem Content="Authorization" Tag="authorization"><NavigationViewItem.Icon><FontIcon Glyph="&#xE785;" /></NavigationViewItem.Icon></NavigationViewItem>
-                <NavigationViewItem Content="Test center" Tag="tests"><NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" /></NavigationViewItem.Icon></NavigationViewItem>
-                <NavigationViewItem Content="4-phase workflow" Tag="firmware"><NavigationViewItem.Icon><FontIcon Glyph="&#xE896;" /></NavigationViewItem.Icon></NavigationViewItem>
-                <NavigationViewItemSeparator />
-                <NavigationViewItem Content="ASM controls" Tag="asm"><NavigationViewItem.Icon><FontIcon Glyph="&#xE950;" /></NavigationViewItem.Icon></NavigationViewItem>
-                <NavigationViewItem Content="Stepper controls" Tag="stepper"><NavigationViewItem.Icon><FontIcon Glyph="&#xEC4A;" /></NavigationViewItem.Icon></NavigationViewItem>
-                <NavigationViewItem Content="Reports &amp; logs" Tag="reports"><NavigationViewItem.Icon><FontIcon Glyph="&#xE9F9;" /></NavigationViewItem.Icon></NavigationViewItem>
-            </NavigationView.MenuItems>
+        <NavigationView x:Name="Navigation" Grid.Row="1" PaneDisplayMode="LeftMinimal" IsPaneToggleButtonVisible="False"
+                        IsBackButtonVisible="Collapsed" IsSettingsVisible="False" Background="{StaticResource CanvasBrush}"
+                        SelectionChanged="Navigation_SelectionChanged">
             <Grid>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <Grid x:Name="PageHost" Padding="24" />
@@ -115,6 +104,25 @@
                         </Expander>
                     </StackPanel>
                 </ScrollViewer>
+            </Border>
+        </Popup>
+
+        <Popup x:Name="FlashSummaryPopup" IsLightDismissEnabled="True">
+            <Border Width="520" Background="{StaticResource RaisedBrush}" BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1" CornerRadius="12" Padding="24" Translation="0,0,32">
+                <StackPanel Spacing="16">
+                    <Grid>
+                        <TextBlock Style="{StaticResource PageTitleStyle}" Text="Ready to flash" />
+                        <Button HorizontalAlignment="Right" Click="CloseFlashSummary_Click" Content="Close" />
+                    </Grid>
+                    <TextBlock x:Name="FlashSummaryText" FontFamily="Cascadia Mono" TextWrapping="Wrap" />
+                    <CheckBox x:Name="FlashAcknowledge" Content="I verified the connected card and ST-LINK target." />
+                    <TextBox x:Name="FlashSerialConfirmation" Header="Type the assigned serial to confirm" FontFamily="Cascadia Mono" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+                        <Button Click="CloseFlashSummary_Click" Content="Cancel" />
+                        <Button Click="FinalFlash_Click" Style="{StaticResource PrimaryButtonStyle}" Content="Flash and verify" />
+                    </StackPanel>
+                </StackPanel>
             </Border>
         </Popup>
     </Grid>

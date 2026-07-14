@@ -77,6 +77,9 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 - Each phase exposes only its relevant actions, displays a persistent status, and gates the next phase on verified device readback.
 - The default-public-key identity flash and generated-public-key flash are separate actions so operators can see exactly when cryptographic identity is introduced.
 - The dashboard opens on the four-phase provisioning workspace rather than the generic overview, and the navigation labels it explicitly so the primary production task is immediately visible.
+- Legacy dashboard destinations are removed from navigation; production operators see one minimal provisioning workspace and connection settings.
+- Instructions are reduced to short action labels and persistent phase status. Detailed flash information appears only in a centered floating summary at the final decision point.
+- Serial, Customer ID, CDI, keys, manifest, and firmware headers are assembled before one final flash; intermediate identity and key flashes are not part of the workflow.
 
 ## Decisions Log
 
@@ -94,3 +97,5 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 | 2026-07-14 | Operator assigns card serial | Serial and generated Customer ID are persisted as one final-truth pair, flashed together, and both require exact readback. |
 | 2026-07-14 | Four-phase provisioning workflow | A visible, gated sequence separates default recovery, identity assignment, public-key programming, and final read-only verification to reduce operator ambiguity and prevent skipped checks. |
 | 2026-07-14 | Provisioning is the startup workspace | Opening directly on the numbered four-phase flow removes an extra navigation step and prevents the redesigned workflow from being mistaken for the unchanged overview. |
+| 2026-07-14 | Generate and stage before one final flash | Saving the complete package and building all final headers before programming reduces repeated card restarts and makes the final destructive action reviewable as one transaction. |
+| 2026-07-14 | Floating flash summary | Flash details and confirmation move out of the primary workspace so the normal phase UI remains minimal. |

@@ -337,7 +337,7 @@ Display a human-readable deny reason while retaining detailed error data in logs
 
 #### Firmware Provisioning
 
-For both supported cards, provide a guarded four-phase workflow: (1) accept or restore and verify repository-default blank firmware, (2) persist and flash the operator-assigned serial plus generated Customer ID with the default public key, (3) generate keys and flash the generated public identity, and (4) perform fresh read-only verification against the persisted identity and manifest. Each phase configures and clean-builds the hardware-specific profile when needed, probes the SWD target before flashing, reconnects over Modbus, and gates the next phase on readback. Keep this on a dedicated page with an operation log.
+For both supported cards, provide one minimal four-phase workflow: (1) read the card and optionally restore default firmware, (2) persist the assigned serial and generated Customer ID and save CDI JSON, (3) generate the complete key package, stage all final headers, and clean-build, and (4) review a floating summary, flash once, reconnect, and validate against the persisted identity and manifest. Detailed command output must not dominate the primary workspace.
 
 Flash requires all prior stages, physical-target acknowledgement, and exact entry of the card serial. Never change RDP option bytes automatically; an unlock can mass-erase the target. See [FIRMWARE_PROVISIONING_AND_FLASH.md](FIRMWARE_PROVISIONING_AND_FLASH.md) for the implemented flow.
 

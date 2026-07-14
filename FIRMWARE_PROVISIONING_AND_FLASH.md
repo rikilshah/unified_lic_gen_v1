@@ -2,7 +2,7 @@
 
 ## Status
 
-The Unified Test & Keygen Dashboard provides one guarded four-phase workflow for both Stepper and ASM cards: establish a default blank baseline, assign serial and Customer ID, generate and flash public keys, then perform final read-only verification.
+The dashboard provides one minimal four-phase workflow for both cards: read or restore the default card, create and save identity, generate the complete key package and stage firmware, then review and flash once.
 
 Authoritative firmware source: [rikilshah/stepper_control_card_v2](https://github.com/rikilshah/stepper_control_card_v2)
 
@@ -14,9 +14,9 @@ ASM firmware source: [rikilshah/VCB240002](https://github.com/rikilshah/VCB24000
 
 1. Select the correct hardware profile, connect, and open **Firmware provisioning**. The target remains locked to the detected card family.
 2. **Phase 1 — Default baseline:** accept a card already reporting Customer ID `0000000000`. Otherwise restore the three identity headers from local `origin/main`, configure and clean-build the default firmware, then flash and require blank readback.
-3. **Phase 2 — Serial and Customer ID:** enter the assigned serial (`SYYMMDDSS` for Stepper or `AYYMMDDSS` for ASM), generate or recover its persisted Customer ID, prepare the assigned identity with the repository-default public key, build, flash, and require exact serial/Customer ID readback.
-4. **Phase 3 — Public keys:** open Keygen, generate the CDI, P-256 keys, and manifest, prepare the generated public-key firmware, build, flash, and require complete manifest identity validation.
-5. **Phase 4 — Final verification:** run a fresh read-only identity check. The dashboard declares completion only when the live serial and Customer ID equal the persisted pair and the public identity equals the manifest.
+3. **Phase 2 — Identity:** enter the assigned serial, generate or recover its Customer ID, and save CDI JSON under the serial target folder. Nothing is flashed.
+4. **Phase 3 — Keys and staging:** generate the complete P-256 package from CDI, including the sensitive private-key PEM, save all outputs under `lic_files`, stage all final identity headers, and clean-build. Nothing is flashed.
+5. **Phase 4 — Final flash:** review the floating summary, confirm the target, flash the one final image, reconnect, and verify the complete live identity against the persisted pair and generated manifest.
 
 Every flash requires a successful build and ST-LINK probe, physical-target acknowledgement, and the exact currently detected card serial. Once Phase 2 flashing starts, the persisted serial/Customer ID pair is final truth and retries reuse it.
 
@@ -69,7 +69,7 @@ Defaults:
 Verification was performed without programming a physical board:
 
 - Unified dashboard build: successful with zero warnings and errors.
-- Automated tests: 24 passed.
+- Automated tests: 25 passed.
 - Stepper clean MinSizeRel build from `main`: 24,180 bytes flash (73.79%), 3,448 bytes RAM (84.18%).
 - ASM clean Release build from `main`: 14,180 bytes flash (43.27%), 1,696 bytes RAM (41.41%).
 - ST-LINK: STM32F03x detected at 3.27 V.

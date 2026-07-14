@@ -35,7 +35,7 @@ Local source folders are working checkouts only and must be synchronized with th
 
 ## Implemented Four-Phase Flow
 
-Each phase is gated. A later phase remains unavailable until the connected card passes the previous phase's readback.
+The minimal dashboard exposes only this workflow. Each phase is gated, and the assigned identity plus generated keys are flashed together only once in the final phase.
 
 ### Phase 1 — Establish the Default Baseline
 
@@ -45,34 +45,36 @@ Each phase is gated. A later phase remains unavailable until the connected card 
 4. After explicit target acknowledgement and exact live-serial confirmation, flash the default firmware.
 5. Reconnect and require the Customer ID to read back as `0000000000` before Phase 2 is enabled.
 
-### Phase 2 — Assign Serial and Customer ID
+### Phase 2 — Create and Save Identity
 
 1. Enter and validate the assigned serial for the selected hardware.
 2. Generate one valid Customer ID and persist it together with the assigned serial, MCU UID, and hardware profile before modifying firmware.
 3. Display the assigned serial and generated Customer ID for operator review.
-4. Restore the repository-default public-key header and write the assigned pair into the identity headers:
+4. Save `<SERIAL>_CDI.json` immediately under `G:\My Drive\PCB_LIC_DB\<SERIAL>\`.
+5. Retain the pair for firmware staging:
 
    ```c
    #define APP_CUST_ID_TEXT "1234567890"
    #define APP_SERIAL_NUMBER_TEXT "S26050606"
    ```
 
-5. Preserve timestamped backups, configure, clean-build, probe, and flash through the guarded process.
-6. Reconnect and require both serial and Customer ID to exactly match the persisted values.
+6. Do not flash in this phase.
 
-### Phase 3 — Generate and Flash Public Keys
+### Phase 3 — Generate Package and Stage Firmware
 
-1. Use the verified Phase 2 identity to generate the CDI, P-256 key pair, and provisioning manifest.
-2. Stage the generated public-key header while retaining the assigned serial and Customer ID.
-3. Configure and clean-build the same hardware profile, probe the target, and flash after the safety confirmations.
-4. Reconnect and require the complete live identity to match the generated manifest.
+1. Use the saved CDI to generate one P-256 key pair.
+2. Write the complete known-format package to `G:\My Drive\PCB_LIC_DB\<SERIAL>\lic_files\`: manifest, raw and SEC1 public keys, fingerprint, register map, `card_public_key.h`, sensitive private-key PEM, and package README.
+3. Stage `card_public_key.h`, `customer_id_config.h`, and `serial_number_config.h` into the selected firmware checkout.
+4. Configure and clean-build the hardware-specific firmware once with all final identity values.
+5. Do not flash in this phase.
 
-### Phase 4 — Final Verification
+### Phase 4 — Review, Flash Once, and Verify
 
-1. Perform a fresh, read-only Modbus identity read.
-2. Require exact serial and Customer ID equality with the persisted first-provisioning session.
-3. Require device ID, Customer ID, raw public key, and fingerprint to match the manifest.
-4. Declare the card complete only after every check passes. Use the same identity for authorization, logs, and reports.
+1. Open the floating flash summary showing hardware, serial, Customer ID, fingerprint, package folder, and firmware artifact.
+2. Require target acknowledgement and exact assigned-serial confirmation.
+3. Probe ST-LINK and flash the single final firmware image.
+4. Reconnect and require exact serial and Customer ID equality with the persisted session.
+5. Require device ID, Customer ID, raw public key, and fingerprint to match the generated manifest before declaring success.
 
 On application restart, the dashboard recovers the persisted session for the connected MCU UID and restores the highest phase that can be proven from live readback and the stored manifest.
 
@@ -94,7 +96,7 @@ On application restart, the dashboard recovers the persisted session for the con
 ## Verification
 
 - Dashboard build: passed with zero warnings and errors.
-- Automated tests: 24 passed, including phase-separated default/public-key header staging, ID generation, serial formatting, persistence/recovery, duplicate device assignment rejection, hardware mismatch rejection, profile artifacts, and header compatibility.
+- Automated tests: 25 passed, including complete private/public key package export, header staging, ID generation, serial formatting, persistence/recovery, duplicate device assignment rejection, hardware mismatch rejection, profile artifacts, and header compatibility.
 - Stepper firmware clean build from synchronized `main`: passed.
 - ASM firmware configure plus clean build from synchronized `main`: passed.
 - No physical flash was executed during automated verification.
