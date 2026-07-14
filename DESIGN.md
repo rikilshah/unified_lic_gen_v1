@@ -80,3 +80,5 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 | 2026-07-13 | Separate ASM and Stepper workspaces | The hardware and register maps are different even though provisioning and authorization are shared. |
 | 2026-07-13 | Guarded Stepper firmware provisioning page | Header staging, clean build, target detection, typed confirmation, flash, and identity readback form one auditable workflow. |
 | 2026-07-13 | Firmware provisioning workflow accepted | The operator confirmed the implemented workflow works on the intended hardware; preserve this behavior as the baseline for later changes. |
+| 2026-07-14 | GitHub repositories are authoritative | Dashboard and firmware changes must start from synchronized GitHub sources; local checkouts are working copies only. |
+| 2026-07-14 | Blank-card Customer ID becomes final truth | Generate once during first provisioning, flash it, and validate readback without silently replacing it. Implementation remains pending both firmware repositories. |

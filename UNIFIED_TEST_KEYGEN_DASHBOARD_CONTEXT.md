@@ -3,6 +3,12 @@
 Date: 2026-07-13  
 Source projects: `D:\vs_dotnet\key_genui_v1`, `D:\vs_dotnet\modbus_dash_asm_v1`, `D:\vs_dotnet\modbus_dash_v1`
 
+Authoritative repositories:
+
+- dashboard: [rikilshah/unified_lic_gen_v1](https://github.com/rikilshah/unified_lic_gen_v1);
+- Stepper firmware: [rikilshah/stepper_control_card_v2](https://github.com/rikilshah/stepper_control_card_v2);
+- second hardware firmware: pending repository link.
+
 ## 1. Objective
 
 Build one well-designed WinUI 3 desktop application for the complete card lifecycle:
@@ -519,3 +525,7 @@ Exit criterion: the dashboard completes a confirmed Stepper update and only decl
 ## 13. Recommended First Release Scope
 
 For the lowest-risk useful release, include the unified shell, serial connection, identity, manifest authorization, embedded Keygen workflow, guarded Stepper firmware provisioning, manual ASM/stepper controls, recommended test suites, and JSON/Markdown reports. Defer arbitrary register writes, remote fleet management, unattended or batch firmware flashing, and generalized plugin loading until the core lifecycle is stable on real hardware.
+
+## 14. Pending Blank-Card Customer ID Provisioning
+
+The agreed SOP is recorded in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md). Implementation is intentionally paused until the second hardware firmware repository is provided and both firmware layouts can be reviewed.

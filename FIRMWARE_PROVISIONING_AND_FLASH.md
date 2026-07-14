@@ -4,7 +4,9 @@
 
 The Unified Test & Keygen Dashboard now provides a guarded end-to-end firmware workflow for the Stepper Control Card. It prepares identity headers, builds firmware, detects the SWD target, flashes the image, reconnects to Modbus, and validates the identity readback.
 
-Firmware source: `D:\stm32_vscode\stepper_control_card_v2`
+Authoritative firmware source: [rikilshah/stepper_control_card_v2](https://github.com/rikilshah/stepper_control_card_v2)
+
+Expected local checkout for the currently implemented tooling: `D:\stm32_vscode\stepper_control_card_v2`. The GitHub repository is the source of truth; the local checkout must be synchronized before preparing or building firmware.
 
 This does not add firmware flashing for the ASM card. The two card families remain separate hardware modules even though they share the CDI, key-generation, manifest, and authorization workflow.
 
@@ -21,6 +23,8 @@ This does not add firmware flashing for the ASM card. The two card families rema
 9. The dashboard disconnects Modbus, programs and starts the ELF, reconnects to the saved COM settings, loads the generated manifest, and compares the live card identity. Only a successful readback is reported as complete.
 
 The operation log records every stage and the external tool output needed to diagnose a failure.
+
+The planned blank-card Customer ID generation step is documented separately in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md). It is not implemented yet.
 
 ## Files and Tools
 
