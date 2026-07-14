@@ -341,6 +341,8 @@ For both supported cards, provide one minimal four-phase workflow: (1) read the 
 
 The implemented presentation is a one-step-at-a-time wizard with visual flash progress. A compact sidebar exposes the four phases plus separate ASM, Stepper, and Test Center workspaces. All panels consume one application-owned Modbus session and its shared COM settings, connection lifecycle, and detected identity; device-specific register maps and commands remain isolated.
 
+The sidebar also exposes a dedicated Verify Board workspace above the control/test entries. A successful manifest comparison is retained as global session authorization, shown in the top bar, revalidated against live identity after reconnect, and required by both control modules. The top bar displays the exact 10-digit Customer ID at all times.
+
 Flash requires all prior stages, physical-target acknowledgement, and exact entry of the card serial. Never change RDP option bytes automatically; an unlock can mass-erase the target. See [FIRMWARE_PROVISIONING_AND_FLASH.md](FIRMWARE_PROVISIONING_AND_FLASH.md) for the implemented flow.
 
 #### Test Center

@@ -66,6 +66,7 @@ public sealed partial class MainWindow : Window
         _pages["firmware"] = BuildMinimalFirmwarePage();
         _pages["asm"] = BuildAsmPage();
         _pages["stepper"] = BuildStepperPage();
+        _pages["verify"] = BuildAuthorizationPage();
         _pages["tests"] = BuildTestsPage();
     }
 
@@ -161,7 +162,7 @@ public sealed partial class MainWindow : Window
 
     private UIElement BuildAuthorizationPage()
     {
-        var root = Page("Authorization", "Compare the trusted manifest with the connected card before enabling controls.");
+        var root = Page("Verify board", "Import a trusted manifest and compare it with the connected board.");
         var load = Card("Provisioning manifest");
         var row = Row();
         row.Children.Add(ActionButton("Import manifest JSON", async (_, _) => await ImportManifestAsync(), true));
@@ -603,12 +604,6 @@ public sealed partial class MainWindow : Window
             SetStatus("Authorization blocked: connect and read a card first.");
             return;
         }
-        if (!_defaultBaselineVerified)
-        {
-            SetStatus("Complete Phase 1 and verify blank default firmware before assigning identity.");
-            return;
-        }
-
         if (_loadedManifest is null)
         {
             SetStatus("Authorization blocked: import a provisioning manifest first.");
@@ -822,7 +817,15 @@ public sealed partial class MainWindow : Window
             if (_deviceProfile == "stepper") await RefreshStepperLiveStatusAsync();
             ConnectionDot.Fill = Brush("SuccessBrush"); ConnectionText.Text = "Connected"; DisconnectButton.IsEnabled = true;
             DeviceTypeText.Text = $"{_firmwareTarget.DisplayName} • Product {_stepperIdentity.ProductCode}";
-            SerialText.Text = $"SERIAL {_stepperIdentity.SerialNumber}"; AuthText.Text = "NOT AUTHORIZED";
+            SerialText.Text = $"SERIAL {_stepperIdentity.SerialNumber}";
+            if (_loadedManifest is not null)
+            {
+                ApplyManifestValidation(_manifestService.Validate(_stepperIdentity, _loadedManifest));
+            }
+            else
+            {
+                AuthText.Text = "NOT AUTHORIZED";
+            }
             SettingsPopup.IsOpen = false;
             var blankNotice = _stepperIdentity.CustomerId10 == "0000000000" ? " Blank card: assigned serial is required before Customer ID generation." : string.Empty;
             SetStatus($"{_firmwareTarget.DisplayName} read through {selectedPort.DisplayName}, slave {slave}. Identity registers are available.{cdiResult}{blankNotice}");
@@ -898,11 +901,13 @@ public sealed partial class MainWindow : Window
     {
         if (string.IsNullOrWhiteSpace(customerId) || customerId == "0000000000")
         {
-            CustomerIdStatusText.Text = "CUST ID  UNPROVISIONED";
+            CustomerIdTopText.Text = "CUST ID 0000000000";
+            CustomerIdStatusText.Text = "CUST ID  0000000000  /  UNPROVISIONED";
             CustomerIdStatusText.Foreground = Brush("WarningBrush");
             return;
         }
 
+        CustomerIdTopText.Text = $"CUST ID {customerId}";
         CustomerIdStatusText.Text = pendingFlash
             ? $"CUST ID  {customerId}  /  GENERATED - PENDING FLASH"
             : $"CUST ID  {customerId}  /  FLASHED";

@@ -27,6 +27,7 @@
                     </StackPanel>
                     <TextBlock x:Name="DeviceTypeText" Style="{StaticResource SecondaryTextStyle}" Text="No hardware selected" />
                     <TextBlock x:Name="SerialText" Style="{StaticResource DataTextStyle}" Text="SERIAL —" />
+                    <TextBlock x:Name="CustomerIdTopText" Style="{StaticResource DataTextStyle}" Text="CUST ID 0000000000" />
                     <Border x:Name="AuthBadge" Background="#332B3746" CornerRadius="12" Padding="10,4">
                         <TextBlock x:Name="AuthText" FontSize="12" Text="NOT AUTHORIZED" />
                     </Border>
@@ -49,6 +50,7 @@
                 <NavigationViewItem Content="3  Generate &amp; stage" Tag="wizard3"><NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="4  Review &amp; flash" Tag="wizard4"><NavigationViewItem.Icon><FontIcon Glyph="&#xE896;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItemSeparator />
+                <NavigationViewItem Content="Verify board" Tag="verify"><NavigationViewItem.Icon><FontIcon Glyph="&#xE73E;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="ASM controls" Tag="asm"><NavigationViewItem.Icon><FontIcon Glyph="&#xE950;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Stepper controls" Tag="stepper"><NavigationViewItem.Icon><FontIcon Glyph="&#xEC4A;" /></NavigationViewItem.Icon></NavigationViewItem>
                 <NavigationViewItem Content="Test center" Tag="tests"><NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" /></NavigationViewItem.Icon></NavigationViewItem>
@@ -64,7 +66,7 @@
             <Grid ColumnSpacing="20">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                 <TextBlock x:Name="StatusText" VerticalAlignment="Center" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" Text="Ready. Select a hardware profile or connect a device." TextTrimming="CharacterEllipsis" />
-                <TextBlock x:Name="CustomerIdStatusText" Grid.Column="1" VerticalAlignment="Center" FontSize="12" FontFamily="Cascadia Mono" FontWeight="SemiBold" Foreground="{StaticResource WarningBrush}" Text="CUST ID  UNPROVISIONED" />
+                <TextBlock x:Name="CustomerIdStatusText" Grid.Column="1" VerticalAlignment="Center" FontSize="12" FontFamily="Cascadia Mono" FontWeight="SemiBold" Foreground="{StaticResource WarningBrush}" Text="CUST ID  0000000000  /  UNPROVISIONED" />
                 <TextBlock Grid.Column="2" VerticalAlignment="Center" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Text="UnifiedLicGen • Material Dark" />
             </Grid>
         </Border>

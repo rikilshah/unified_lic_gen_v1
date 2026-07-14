@@ -4,6 +4,8 @@ Minimal Windows workflow for reading blank ASM or Stepper cards, assigning ident
 
 Provisioning phases, ASM controls, Stepper controls, and Test Center are organized in one compact sidebar. Every panel shares the same global Modbus connection and detected identity.
 
+The exact 10-digit Customer ID and manifest-verification state remain visible globally. Use the dedicated **Verify board** tab before operating either control panel.
+
 ## Documentation
 
 - [Design system and UX rules](DESIGN.md)
