@@ -12,7 +12,7 @@ Provision a blank card with a new 10-digit Customer ID during its first firmware
 
 - Dashboard: [rikilshah/unified_lic_gen_v1](https://github.com/rikilshah/unified_lic_gen_v1)
 - Stepper firmware: [rikilshah/stepper_control_card_v2](https://github.com/rikilshah/stepper_control_card_v2)
-- Second hardware firmware: pending repository link
+- ASM firmware: [rikilshah/VCB240002](https://github.com/rikilshah/VCB240002)
 
 Local source folders are working checkouts only and must be synchronized with their GitHub repositories before implementation, building, or flashing.
 
@@ -52,4 +52,4 @@ Local source folders are working checkouts only and must be synchronized with th
 
 ## Implementation Gate
 
-No dashboard code will be changed for this SOP until the second hardware firmware repository is supplied and both implementations of `customer_id_config.h` and their identity register maps have been reviewed.
+Both firmware repositories are now available. No dashboard code will be changed for this SOP until both implementations of `customer_id_config.h`, their build/flash procedures, and their identity register maps have been reviewed.

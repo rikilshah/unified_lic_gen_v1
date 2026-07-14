@@ -82,3 +82,4 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 | 2026-07-13 | Firmware provisioning workflow accepted | The operator confirmed the implemented workflow works on the intended hardware; preserve this behavior as the baseline for later changes. |
 | 2026-07-14 | GitHub repositories are authoritative | Dashboard and firmware changes must start from synchronized GitHub sources; local checkouts are working copies only. |
 | 2026-07-14 | Blank-card Customer ID becomes final truth | Generate once during first provisioning, flash it, and validate readback without silently replacing it. Implementation remains pending both firmware repositories. |
+| 2026-07-14 | ASM firmware source established | `rikilshah/VCB240002` is the authoritative ASM firmware repository; both firmware sources must be reviewed before Customer ID implementation. |

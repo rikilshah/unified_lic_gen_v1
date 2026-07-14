@@ -7,7 +7,7 @@ Authoritative repositories:
 
 - dashboard: [rikilshah/unified_lic_gen_v1](https://github.com/rikilshah/unified_lic_gen_v1);
 - Stepper firmware: [rikilshah/stepper_control_card_v2](https://github.com/rikilshah/stepper_control_card_v2);
-- second hardware firmware: pending repository link.
+- ASM firmware: [rikilshah/VCB240002](https://github.com/rikilshah/VCB240002).
 
 ## 1. Objective
 
@@ -528,4 +528,4 @@ For the lowest-risk useful release, include the unified shell, serial connection
 
 ## 14. Pending Blank-Card Customer ID Provisioning
 
-The agreed SOP is recorded in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md). Implementation is intentionally paused until the second hardware firmware repository is provided and both firmware layouts can be reviewed.
+The agreed SOP is recorded in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md). Both firmware repositories are available; implementation remains intentionally paused until their header contracts, build/flash procedures, and identity register maps are reviewed.

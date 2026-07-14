@@ -13,7 +13,7 @@ Windows dashboard for CDI capture, P-256 key generation, manifest authorization,
 
 - Dashboard source of truth: [rikilshah/unified_lic_gen_v1](https://github.com/rikilshah/unified_lic_gen_v1)
 - Stepper firmware source of truth: [rikilshah/stepper_control_card_v2](https://github.com/rikilshah/stepper_control_card_v2)
-- Second hardware firmware repository: pending
+- ASM firmware source of truth: [rikilshah/VCB240002](https://github.com/rikilshah/VCB240002)
 
 ## Local Verification
 
