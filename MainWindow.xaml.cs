@@ -838,6 +838,7 @@ public sealed partial class MainWindow : Window
     private async void DisconnectButton_Click(object sender, RoutedEventArgs e)
     {
         await _stepperModbus.DisconnectAsync();
+        UpdateCustomerIdStatus(null);
         _connected = false; _authorized = false; _deviceProfile = "none"; _customerIdSession = null; ResetProvisioningPhases(); ConnectionDot.Fill = Brush("ErrorBrush"); ConnectionText.Text = "Disconnected"; DeviceTypeText.Text = "No hardware selected"; SerialText.Text = "SERIAL —"; AuthText.Text = "NOT AUTHORIZED"; AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(51, 43, 55, 70)); DisconnectButton.IsEnabled = false; SetStatus("Disconnected. Authorization and hardware writes were cleared.");
     }
 
@@ -892,6 +893,21 @@ public sealed partial class MainWindow : Window
     }
 
     private void SetStatus(string message) => StatusText.Text = $"{DateTime.Now:HH:mm:ss}  {message}";
+
+    private void UpdateCustomerIdStatus(string? customerId, bool pendingFlash = false)
+    {
+        if (string.IsNullOrWhiteSpace(customerId) || customerId == "0000000000")
+        {
+            CustomerIdStatusText.Text = "CUST ID  UNPROVISIONED";
+            CustomerIdStatusText.Foreground = Brush("WarningBrush");
+            return;
+        }
+
+        CustomerIdStatusText.Text = pendingFlash
+            ? $"CUST ID  {customerId}  /  GENERATED - PENDING FLASH"
+            : $"CUST ID  {customerId}  /  FLASHED";
+        CustomerIdStatusText.Foreground = pendingFlash ? Brush("AccentBrush") : Brush("SuccessBrush");
+    }
 
     private void FirmwareTarget_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -978,6 +994,7 @@ public sealed partial class MainWindow : Window
     {
         var effectiveCustomerId = customerIdOverride ?? identity.CustomerId10;
         var effectiveSerial = serialOverride ?? identity.SerialNumber;
+        UpdateCustomerIdStatus(effectiveCustomerId, customerIdOverride is not null);
         _currentCdi = new CardIdentityCdi
         {
             SerialNumber = effectiveSerial,

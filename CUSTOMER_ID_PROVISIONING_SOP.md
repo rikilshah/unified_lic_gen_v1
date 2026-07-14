@@ -50,15 +50,16 @@ The minimal dashboard exposes only this workflow. Each phase is gated, and the a
 1. Enter and validate the assigned serial for the selected hardware.
 2. Generate one valid Customer ID and persist it together with the assigned serial, MCU UID, and hardware profile before modifying firmware.
 3. Display the assigned serial and generated Customer ID for operator review.
-4. Save `<SERIAL>_CDI.json` immediately under `G:\My Drive\PCB_LIC_DB\<SERIAL>\`.
-5. Retain the pair for firmware staging:
+4. Show the generated value persistently in the shared status bar as `GENERATED - PENDING FLASH`; show a default `0000000000` card as `UNPROVISIONED`.
+5. Save `<SERIAL>_CDI.json` immediately under `G:\My Drive\PCB_LIC_DB\<SERIAL>\`.
+6. Retain the pair for firmware staging:
 
    ```c
    #define APP_CUST_ID_TEXT "1234567890"
    #define APP_SERIAL_NUMBER_TEXT "S26050606"
    ```
 
-6. Do not flash in this phase.
+7. Do not flash in this phase.
 
 ### Phase 3 — Generate Package and Stage Firmware
 
@@ -75,6 +76,7 @@ The minimal dashboard exposes only this workflow. Each phase is gated, and the a
 3. Probe ST-LINK and flash the single final firmware image.
 4. Reconnect and require exact serial and Customer ID equality with the persisted session.
 5. Require device ID, Customer ID, raw public key, and fingerprint to match the generated manifest before declaring success.
+6. Replace the pending status-bar label with the live readback value marked `FLASHED`.
 
 On application restart, the dashboard recovers the persisted session for the connected MCU UID and restores the highest phase that can be proven from live readback and the stored manifest.
 

@@ -84,6 +84,7 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 - The flash summary includes visual progress for confirmation, ST-LINK probe, programming/reconnect, and identity verification.
 - A persistent compact sidebar contains the four provisioning phases, ASM controls, Stepper controls, and Test Center.
 - Modbus is global application state: every sidebar panel uses the same selected COM port, baud, slave ID, serialized session, connection status, and detected card identity.
+- The shared bottom status bar always exposes Customer ID state: `UNPROVISIONED` for firmware default `0000000000`, the generated value as `PENDING FLASH`, and the live confirmed value as `FLASHED`.
 - The provisioning canvas uses an aligned 290 px target column and flexible action column; control pages use consistent equal-width grids and compact 12/16 px spacing.
 
 ## Decisions Log
@@ -106,3 +107,4 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 | 2026-07-14 | Floating flash summary | Flash details and confirmation move out of the primary workspace so the normal phase UI remains minimal. |
 | 2026-07-14 | Wizard and control workspaces share one sidebar shell | One visible provisioning step reduces scanning load while ASM, Stepper, and testing remain immediately reachable without creating a second Modbus owner. |
 | 2026-07-14 | One global Modbus session | Provisioning and all control/test panels share transport settings, connection lifecycle, serialization, and identity to prevent COM-port contention and inconsistent state. |
+| 2026-07-14 | Customer ID is persistently visible | Operators can copy the generated public Customer ID into an external database and distinguish pending host data from confirmed card readback. |

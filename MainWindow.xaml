@@ -61,9 +61,11 @@
         </NavigationView>
 
         <Border Grid.Row="2" Background="{StaticResource NavBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="16,0">
-            <Grid>
-                <TextBlock x:Name="StatusText" VerticalAlignment="Center" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" Text="Ready. Select a hardware profile or connect a device." />
-                <TextBlock HorizontalAlignment="Right" VerticalAlignment="Center" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Text="UnifiedLicGen • Material Dark" />
+            <Grid ColumnSpacing="20">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBlock x:Name="StatusText" VerticalAlignment="Center" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" Text="Ready. Select a hardware profile or connect a device." TextTrimming="CharacterEllipsis" />
+                <TextBlock x:Name="CustomerIdStatusText" Grid.Column="1" VerticalAlignment="Center" FontSize="12" FontFamily="Cascadia Mono" FontWeight="SemiBold" Foreground="{StaticResource WarningBrush}" Text="CUST ID  UNPROVISIONED" />
+                <TextBlock Grid.Column="2" VerticalAlignment="Center" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Text="UnifiedLicGen • Material Dark" />
             </Grid>
         </Border>
 
