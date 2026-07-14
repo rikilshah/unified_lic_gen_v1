@@ -1,0 +1,39 @@
+# Build outputs
+bin/
+obj/
+TestResults/
+artifacts/
+
+# Visual Studio and user-specific state
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# JetBrains tools
+.idea/
+*.sln.iml
+
+# Packages and generated installers
+packages/
+*.nupkg
+*.snupkg
+AppPackages/
+BundleArtifacts/
+
+# Logs, dumps, and local reports
+*.log
+*.dmp
+*.tmp
+*.bak
+
+# Local provisioning secrets and generated key material
+lic_files/
+*.pem
+*_privkey_*
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
