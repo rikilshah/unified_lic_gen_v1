@@ -10,6 +10,7 @@ public sealed class FirmwareProvisioningService
     public const string DefaultCmakePath = @"C:\ST\STM32CubeCLT_1.15.0\CMake\bin\cmake.exe";
     public const string DefaultProgrammerPath = @"C:\ST\STM32CubeCLT_1.15.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe";
     public const string DefaultGitPath = @"C:\Program Files\Git\cmd\git.exe";
+    public const string DefaultFlashConfirmation = "FLASH DEFAULT";
 
     private readonly string _firmwareRoot;
     private readonly string _cmakePath;
@@ -119,6 +120,22 @@ public sealed class FirmwareProvisioningService
         if (!string.Equals(confirmationSerial?.Trim(), cdi.SerialNumber, StringComparison.Ordinal))
             throw new InvalidOperationException($"Flash confirmation must exactly match serial {cdi.SerialNumber}.");
         if (!File.Exists(ElfPath)) throw new FileNotFoundException("Built firmware ELF was not found. Build successfully before flashing.", ElfPath);
+
+        var probe = await ProbeStLinkAsync(cancellationToken).ConfigureAwait(false);
+        if (!probe.Succeeded) throw new InvalidOperationException($"ST-LINK probe failed.{Environment.NewLine}{probe.Output}");
+        if (ShowsProtectedRdp(probe.Output))
+            throw new InvalidOperationException("Target reports protected RDP option bytes. Automatic unlock is intentionally blocked because it may mass-erase flash.");
+
+        return await RunAsync(_programmerPath,
+            ["--connect", "port=swd", "mode=UR", "reset=HWrst", "--download", ElfPath, "-hardRst", "-rst", "--start"],
+            _firmwareRoot, TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<ExternalCommandResult> FlashDefaultAsync(string confirmation, CancellationToken cancellationToken = default)
+    {
+        if (!string.Equals(confirmation?.Trim(), DefaultFlashConfirmation, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Default flash confirmation must exactly match {DefaultFlashConfirmation}.");
+        if (!File.Exists(ElfPath)) throw new FileNotFoundException("Built default firmware ELF was not found. Build successfully before flashing.", ElfPath);
 
         var probe = await ProbeStLinkAsync(cancellationToken).ConfigureAwait(false);
         if (!probe.Succeeded) throw new InvalidOperationException($"ST-LINK probe failed.{Environment.NewLine}{probe.Output}");

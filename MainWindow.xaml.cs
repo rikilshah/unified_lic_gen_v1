@@ -49,6 +49,7 @@ public sealed partial class MainWindow : Window
     private bool _stLinkReady;
     private bool _defaultBaselineVerified;
     private bool _defaultFirmwareBuilt;
+    private bool _defaultFirmwareFlashSucceeded;
     private bool _assignedIdentityPrepared;
     private bool _assignedIdentityVerified;
     private bool _publicKeyPrepared;
@@ -1118,15 +1119,10 @@ public sealed partial class MainWindow : Window
 
     private async Task PrepareAndBuildDefaultAsync()
     {
-        if (!_connected || _stepperIdentity is null)
-        {
-            SetStatus("Connect and read the card before preparing default firmware.");
-            return;
-        }
         try
         {
             AppendFirmwareLog($"PHASE 1: restoring {_firmwareTarget.DisplayName} identity headers from origin/main...");
-            var prepared = await _firmwareProvisioning.PrepareRepositoryDefaultsAsync(_stepperIdentity.SerialNumber);
+            var prepared = await _firmwareProvisioning.PrepareRepositoryDefaultsAsync(_stepperIdentity?.SerialNumber ?? "blank-target");
             AppendFirmwareLog($"Repository defaults staged. Backup: {prepared.BackupFolder}");
             _defaultFirmwareBuilt = await BuildForPhaseAsync("PHASE 1 default firmware");
             SetPhaseStatus("Phase1Status", _defaultFirmwareBuilt ? "READY TO FLASH — repository default built" : "FAILED — review build log", _defaultFirmwareBuilt ? "AccentBrush" : "ErrorBrush");
@@ -1141,32 +1137,52 @@ public sealed partial class MainWindow : Window
 
     private async Task FlashDefaultAndVerifyAsync()
     {
-        if (!_defaultFirmwareBuilt || _stepperIdentity is null || _currentCdi is null)
+        if (!_defaultFirmwareBuilt)
         {
             SetStatus("Prepare and build repository default firmware before Phase 1 flash.");
             return;
         }
-        var currentTargetSerial = _stepperIdentity.SerialNumber;
-        if (!VerifyFlashConfirmation(currentTargetSerial)) return;
+        if (FlashAcknowledge.IsChecked != true)
+        {
+            SetStatus("Acknowledge the physical ST-LINK target before default flashing.");
+            return;
+        }
+        var confirmation = FlashSerialConfirmation.Text?.Trim() ?? string.Empty;
+        if (!string.Equals(confirmation, FirmwareProvisioningService.DefaultFlashConfirmation, StringComparison.Ordinal))
+        {
+            SetStatus($"Type {FirmwareProvisioningService.DefaultFlashConfirmation} to confirm the SWD-only default flash.");
+            return;
+        }
         try
         {
-            var readback = await FlashAndReconnectForPhaseAsync(_currentCdi, currentTargetSerial, "PHASE 1");
-            if (readback.CustomerId10 != "0000000000")
-                throw new InvalidOperationException($"Default verification failed: Customer ID is {readback.CustomerId10}, expected 0000000000.");
-            _stepperIdentity = readback;
-            ApplyStepperIdentity(readback);
-            _defaultBaselineVerified = true;
+            if (_stepperModbus.IsConnected) await _stepperModbus.DisconnectAsync();
+            _connected = false;
+            _authorized = false;
+            _stepperIdentity = null;
+            _currentCdi = null;
+            _customerIdSession = null;
+            SerialText.Text = "SERIAL —";
+            AuthText.Text = "NOT AUTHORIZED";
+            AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(51, 43, 55, 70));
+            ConnectionDot.Fill = Brush("WarningBrush");
+            ConnectionText.Text = "SWD flashing";
+            var flash = await _firmwareProvisioning.FlashDefaultAsync(confirmation);
+            if (!flash.Succeeded) throw new InvalidOperationException($"STM32CubeProgrammer returned exit code {flash.ExitCode}.");
+            _defaultFirmwareFlashSucceeded = true;
+            _defaultBaselineVerified = false;
             _defaultFirmwareBuilt = false;
-            SetPhaseStatus("Phase1Status", "COMPLETE — repository default flashed and blank verified", "SuccessBrush");
-            SetPhaseStatus("Phase2Status", "READY — enter assigned serial", "AccentBrush");
-            SetStatus("Phase 1 complete. Default firmware is blank and verified.");
-            ShowWizardStep(2);
+            ConnectionText.Text = "Default flashed";
+            DisconnectButton.IsEnabled = false;
+            UpdateCustomerIdStatus(null);
+            SetPhaseStatus("Phase1Status", "DEFAULT FLASHED - connect through Modbus to continue", "SuccessBrush");
+            SetStatus("Default firmware flashed through SWD without Modbus. Connect and identify the card to continue.");
         }
         catch (Exception ex)
         {
+            _defaultFirmwareFlashSucceeded = false;
             _defaultBaselineVerified = false;
-            AppendFirmwareLog($"PHASE 1 FLASH/VERIFY FAILED: {ex.Message}");
-            SetPhaseStatus("Phase1Status", "FAILED — default readback did not pass", "ErrorBrush");
+            AppendFirmwareLog($"PHASE 1 SWD FLASH FAILED: {ex.Message}");
+            SetPhaseStatus("Phase1Status", "FAILED - default SWD flash did not complete", "ErrorBrush");
             SetStatus($"Phase 1 failed: {ex.Message}");
         }
     }
@@ -1275,14 +1291,14 @@ public sealed partial class MainWindow : Window
 
     private void ShowDefaultFlashSummary()
     {
-        if (!_defaultFirmwareBuilt || _stepperIdentity is null)
+        if (!_defaultFirmwareBuilt)
         {
             SetStatus("Prepare default firmware before flashing it.");
             return;
         }
         _flashDefaultRequested = true;
-        FlashSummaryText.Text = $"DEFAULT FIRMWARE{Environment.NewLine}{Environment.NewLine}Hardware: {_firmwareTarget.DisplayName}{Environment.NewLine}Current card: {_stepperIdentity.SerialNumber}{Environment.NewLine}Firmware: {_firmwareProvisioning.ElfPath}";
-        FlashSerialConfirmation.Header = "Type the current card serial to confirm";
+        FlashSummaryText.Text = $"DEFAULT FIRMWARE - SWD ONLY{Environment.NewLine}{Environment.NewLine}Hardware: {_firmwareTarget.DisplayName}{Environment.NewLine}Modbus identity: Not required{Environment.NewLine}Firmware: {_firmwareProvisioning.ElfPath}";
+        FlashSerialConfirmation.Header = $"Type {FirmwareProvisioningService.DefaultFlashConfirmation} to confirm";
         FlashSerialConfirmation.Text = string.Empty;
         FlashAcknowledge.IsChecked = false;
         FlashProgressPanel.Visibility = Visibility.Collapsed;
@@ -1321,10 +1337,10 @@ public sealed partial class MainWindow : Window
             {
                 SetFlashProgress(25, "Probing ST-LINK...");
                 FlashProgressBar.IsIndeterminate = true;
-                FlashProgressText.Text = "Programming default firmware and reading the card...";
+                FlashProgressText.Text = "Programming default firmware through ST-LINK...";
                 await FlashDefaultAndVerifyAsync();
                 FlashProgressBar.IsIndeterminate = false;
-                SetFlashProgress(_defaultBaselineVerified ? 100 : 0, _defaultBaselineVerified ? "Default firmware verified." : "Default flash failed. Check status.");
+                SetFlashProgress(_defaultFirmwareFlashSucceeded ? 100 : 0, _defaultFirmwareFlashSucceeded ? "Default firmware flashed. Connect through Modbus to continue." : "Default flash failed. Check status.");
                 return;
             }
             if (!_publicKeyPrepared || _currentCdi is null)
@@ -1706,6 +1722,7 @@ public sealed partial class MainWindow : Window
     {
         _defaultBaselineVerified = false;
         _defaultFirmwareBuilt = false;
+        _defaultFirmwareFlashSucceeded = false;
         _assignedIdentityPrepared = false;
         _assignedIdentityVerified = false;
         _publicKeyPrepared = false;

@@ -120,4 +120,14 @@ public sealed class FirmwareProvisioningServiceTests
 
         Assert.Contains("exactly match", error.Message);
     }
+
+    [Fact]
+    public async Task FlashDefaultAsync_RejectsWrongConfirmationWithoutModbusIdentity()
+    {
+        var service = new FirmwareProvisioningService("missing-root", "missing-cmake", "missing-programmer");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.FlashDefaultAsync("S26050606"));
+
+        Assert.Contains(FirmwareProvisioningService.DefaultFlashConfirmation, error.Message);
+    }
 }

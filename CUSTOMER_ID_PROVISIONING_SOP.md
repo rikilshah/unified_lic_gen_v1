@@ -39,11 +39,12 @@ The minimal dashboard exposes only this workflow. Each phase is gated, and the a
 
 ### Phase 1 — Establish the Default Baseline
 
-1. Connect and identify the card.
+1. Attempt normal Modbus connection when the card already contains default firmware.
 2. If the live Customer ID is `0000000000`, accept the detected card as the default blank baseline.
-3. If it is not blank, restore `card_public_key.h`, `customer_id_config.h`, and `serial_number_config.h` from the local firmware checkout's `origin/main`, then configure and clean-build the selected hardware profile.
-4. After explicit target acknowledgement and exact live-serial confirmation, flash the default firmware.
-5. Reconnect and require the Customer ID to read back as `0000000000` before Phase 2 is enabled.
+3. If a physically blank card has no Modbus firmware and cannot connect, select its hardware profile and restore `card_public_key.h`, `customer_id_config.h`, and `serial_number_config.h` from the local firmware checkout's `origin/main` without requiring Modbus identity.
+4. Configure and clean-build the selected default firmware, acknowledge the physical ST-LINK target, and type `FLASH DEFAULT`.
+5. Probe and flash entirely through SWD. No COM port, serial number, Customer ID, Modbus read, or post-flash Modbus reconnect is required for programmer success.
+6. After SWD programming, connect and identify the newly responsive card through Modbus. Require Customer ID `0000000000` before Phase 2 is enabled.
 
 ### Phase 2 — Create and Save Identity
 
@@ -98,7 +99,7 @@ On application restart, the dashboard recovers the persisted session for the con
 ## Verification
 
 - Dashboard build: passed with zero warnings and errors.
-- Automated tests: 25 passed, including complete private/public key package export, header staging, ID generation, serial formatting, persistence/recovery, duplicate device assignment rejection, hardware mismatch rejection, profile artifacts, and header compatibility.
+- Automated tests: 26 passed, including SWD-only default-flash confirmation without Modbus identity, complete private/public key package export, header staging, ID generation, serial formatting, persistence/recovery, hardware mismatch rejection, profile artifacts, and header compatibility.
 - Stepper firmware clean build from synchronized `main`: passed.
 - ASM firmware configure plus clean build from synchronized `main`: passed.
 - No physical flash was executed during automated verification.

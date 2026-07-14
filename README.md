@@ -2,6 +2,8 @@
 
 Minimal Windows workflow for reading blank ASM or Stepper cards, assigning identity, generating the complete P-256 package, staging firmware, and performing one guarded final flash with readback verification.
 
+Physically blank cards without Modbus firmware can be bootstrapped in Phase 1 using the guarded ST-LINK-only default flash. Connect through Modbus after that flash to continue provisioning.
+
 Provisioning phases, ASM controls, Stepper controls, and Test Center are organized in one compact sidebar. Every panel shares the same global Modbus connection and detected identity.
 
 The exact 10-digit Customer ID and manifest-verification state remain visible globally. Use the dedicated **Verify board** tab before operating either control panel.
