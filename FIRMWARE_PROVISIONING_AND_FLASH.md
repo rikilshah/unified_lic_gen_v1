@@ -13,14 +13,14 @@ ASM firmware source: [rikilshah/VCB240002](https://github.com/rikilshah/VCB24000
 ## Operator Workflow
 
 1. Select the correct hardware profile and connect to the card.
-2. If the card reports `0000000000`, the dashboard generates or recovers one persisted valid Customer ID and marks it pending first flash.
+2. If the card reports `0000000000`, enter its assigned serial (`SYYMMDDSS` for Stepper or `AYYMMDDSS` for ASM). The dashboard then generates or recovers one persisted valid Customer ID and marks the pair pending first flash.
 3. Generate and export the manifest package using that effective CDI.
 4. Open **Firmware provisioning** and confirm the firmware target matches the connected card.
 5. Prepare identity headers, then configure and clean-build the hardware-specific preset.
 6. Detect the intended ST-LINK target.
 7. Acknowledge the physical target and type the exact card serial.
-8. Flash and verify. Once flashing starts, the persisted Customer ID is final truth and retries reuse it.
-9. The dashboard reconnects using the saved COM settings and requires exact Customer ID plus manifest identity readback before success.
+8. Flash and verify. Once flashing starts, the persisted serial/Customer ID pair is final truth and retries reuse it.
+9. The dashboard reconnects using the saved COM settings and requires exact serial, Customer ID, and manifest identity readback before success.
 
 The operation log records every stage and the external tool output needed to diagnose a failure.
 
@@ -52,7 +52,8 @@ Defaults:
 - Confirmation text must exactly equal the intended card serial.
 - RDP level 1 or 2 is rejected. The dashboard never changes option bytes or attempts an automatic unlock because that may erase the target.
 - Programmer exit code zero is insufficient: the board must reconnect through Modbus and pass manifest identity validation.
-- A blank-card Customer ID is persisted before header modification and cannot be silently regenerated after flashing begins.
+- The operator-assigned serial and generated Customer ID are persisted before header modification and cannot be silently replaced after flashing begins.
+- A second serial assignment for the same MCU UID and hardware profile is rejected.
 - The firmware target cannot be changed away from the connected hardware profile.
 
 ## Failure Recovery
@@ -69,7 +70,7 @@ Defaults:
 Verification was performed without programming a physical board:
 
 - Unified dashboard build: successful with zero warnings and errors.
-- Automated tests: 17 passed.
+- Automated tests: 23 passed.
 - Stepper clean MinSizeRel build from `main`: 24,180 bytes flash (73.79%), 3,448 bytes RAM (84.18%).
 - ASM clean Release build from `main`: 14,180 bytes flash (43.27%), 1,696 bytes RAM (41.41%).
 - ST-LINK: STM32F03x detected at 3.27 V.

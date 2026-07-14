@@ -337,7 +337,7 @@ Display a human-readable deny reason while retaining detailed error data in logs
 
 #### Firmware Provisioning
 
-For both supported cards, provide a guarded workflow that persists blank-card Customer ID truth, stages generated identity headers into the selected firmware source, configures and clean-builds its hardware-specific profile, probes the SWD target, flashes the ELF, reconnects over Modbus, and validates live identity against the generated manifest. Keep this on a dedicated page with an operation log.
+For both supported cards, provide a guarded workflow that persists the operator-assigned serial and generated Customer ID as blank-card truth, stages identity headers into the selected firmware source, configures and clean-builds its hardware-specific profile, probes the SWD target, flashes the ELF, reconnects over Modbus, and validates live identity against the generated manifest. Keep this on a dedicated page with an operation log.
 
 Flash requires all prior stages, physical-target acknowledgement, and exact entry of the card serial. Never change RDP option bytes automatically; an unlock can mass-erase the target. See [FIRMWARE_PROVISIONING_AND_FLASH.md](FIRMWARE_PROVISIONING_AND_FLASH.md) for the implemented flow.
 
@@ -528,4 +528,4 @@ For the lowest-risk useful release, include the unified shell, serial connection
 
 ## 14. Blank-Card Customer ID Provisioning
 
-The implemented SOP is recorded in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md). It supports both firmware repositories, persists final truth before flashing, configures the correct build preset, and fails closed on Customer ID or manifest readback mismatch.
+The implemented SOP is recorded in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md). It supports both firmware repositories, requires the operator-assigned `S`/`A` serial before Customer ID generation, persists the pair before flashing, and fails closed on serial, Customer ID, or manifest readback mismatch.

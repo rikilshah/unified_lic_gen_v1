@@ -221,7 +221,8 @@ public sealed partial class MainWindow : Window
         root.Children.Add(target);
 
         var customer = Card("0. Blank-card Customer ID");
-        customer.Children.Add(new TextBlock { Text = "On first connection, generate or recover one persisted 10-digit ID. Three identical consecutive digits are prohibited. This value becomes final truth when flashing starts.", TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush") });
+        customer.Children.Add(new TextBlock { Text = "Enter the assigned XYYMMDDSS serial, then generate or recover one persisted 10-digit ID. Both values become final truth when flashing starts.", TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush") });
+        customer.Children.Add(new TextBox { Name = "ProvisioningSerialInput", Header = "Assigned card serial", PlaceholderText = "S26050606", MaxLength = 9, FontFamily = new FontFamily("Cascadia Mono") });
         customer.Children.Add(new TextBlock { Name = "CustomerIdProvisioningValue", Text = "Connect a blank card (Customer ID 0000000000)", FontFamily = new FontFamily("Cascadia Mono"), FontSize = 22 });
         customer.Children.Add(ActionButton("Generate / recover Customer ID", async (_, _) => await PrepareBlankCustomerIdAsync(), true));
         root.Children.Add(customer);
@@ -626,17 +627,21 @@ public sealed partial class MainWindow : Window
             _customerIdSession = null;
             if (_stepperIdentity.CustomerId10 == "0000000000")
             {
-                _customerIdSession = await _customerIdProvisioning.LoadOrCreateAsync(
-                    _stepperIdentity.SerialNumber, _stepperIdentity.DeviceId96, _deviceProfile);
-                ApplyStepperIdentity(_stepperIdentity, _customerIdSession.CustomerId);
-                AppendFirmwareLog($"Blank card detected. Customer ID {_customerIdSession.CustomerId} generated/recovered and persisted.");
+                ApplyStepperIdentity(_stepperIdentity);
+                var value = FindNameInPages<TextBlock>("CustomerIdProvisioningValue");
+                if (value is not null) value.Text = $"ENTER ASSIGNED {_firmwareTarget.SerialPrefix} SERIAL";
+                AppendFirmwareLog("Blank card detected. Waiting for the operator-assigned serial before creating final identity.");
             }
             else
             {
                 ApplyStepperIdentity(_stepperIdentity);
             }
             string cdiResult;
-            try
+            if (_stepperIdentity.CustomerId10 == "0000000000")
+            {
+                cdiResult = " Enter the assigned serial to create the final CDI.";
+            }
+            else try
             {
                 _currentCdiPath = await _cdiStorage.SaveToDatabaseAsync(_currentCdi!);
                 cdiResult = $" CDI saved to {_currentCdiPath}.";
@@ -650,7 +655,7 @@ public sealed partial class MainWindow : Window
             DeviceTypeText.Text = $"{_firmwareTarget.DisplayName} • Product {_stepperIdentity.ProductCode}";
             SerialText.Text = $"SERIAL {_stepperIdentity.SerialNumber}"; AuthText.Text = "NOT AUTHORIZED";
             SettingsPopup.IsOpen = false;
-            var blankNotice = _customerIdSession is null ? string.Empty : $" Pending Customer ID {_customerIdSession.CustomerId} is ready for keygen and first flash.";
+            var blankNotice = _stepperIdentity.CustomerId10 == "0000000000" ? " Blank card: assigned serial is required before Customer ID generation." : string.Empty;
             SetStatus($"{_firmwareTarget.DisplayName} read through {selectedPort.DisplayName}, slave {slave}. Identity registers are available.{cdiResult}{blankNotice}");
             SelectNavigation("identity");
         }
@@ -746,10 +751,12 @@ public sealed partial class MainWindow : Window
         var source = FindNameInPages<TextBlock>("FirmwareSource");
         var output = FindNameInPages<TextBlock>("FirmwareBuildOutput");
         var product = FindNameInPages<TextBox>("ExportProduct");
+        var serialInput = FindNameInPages<TextBox>("ProvisioningSerialInput");
         if (repository is not null) repository.Text = profile.RepositoryUrl;
         if (source is not null) source.Text = profile.LocalRoot;
         if (output is not null) output.Text = _firmwareProvisioning.ElfPath;
         if (product is not null) product.Text = profile.Id == "asm" ? "VCB240002 ASM I/O Card" : "Stepper Control Card V2";
+        if (serialInput is not null) serialInput.PlaceholderText = profile.Id == "asm" ? "A26050605" : "S26050606";
     }
 
     private async Task PrepareBlankCustomerIdAsync()
@@ -767,11 +774,22 @@ public sealed partial class MainWindow : Window
 
         try
         {
+            var assignedSerial = CustomerIdProvisioningService.NormalizeSerial(
+                FindNameInPages<TextBox>("ProvisioningSerialInput")?.Text);
+            if (!CustomerIdProvisioningService.IsValidSerial(assignedSerial))
+                throw new InvalidDataException("Enter the assigned serial in XYYMMDDSS format, for example S26050606 or A26050605.");
+            if (assignedSerial[0] != _firmwareTarget.SerialPrefix)
+                throw new InvalidDataException($"{_firmwareTarget.DisplayName} serial must begin with {_firmwareTarget.SerialPrefix}.");
+
             _customerIdSession ??= await _customerIdProvisioning.LoadOrCreateAsync(
-                _stepperIdentity.SerialNumber, _stepperIdentity.DeviceId96, _deviceProfile);
-            ApplyStepperIdentity(_stepperIdentity, _customerIdSession.CustomerId);
-            AppendFirmwareLog($"Customer ID {_customerIdSession.CustomerId} is persisted for {_stepperIdentity.SerialNumber}; retries will reuse it.");
-            SetStatus($"Customer ID {_customerIdSession.CustomerId} is ready. Generate the key package, then prepare firmware headers.");
+                assignedSerial, _stepperIdentity.DeviceId96, _deviceProfile);
+            if (!string.Equals(_customerIdSession.SerialNumber, assignedSerial, StringComparison.Ordinal))
+                throw new InvalidDataException($"Recovered session requires assigned serial {_customerIdSession.SerialNumber}.");
+            ApplyStepperIdentity(_stepperIdentity, _customerIdSession.CustomerId, _customerIdSession.SerialNumber);
+            _currentCdiPath = await _cdiStorage.SaveToDatabaseAsync(_currentCdi!);
+            SerialText.Text = $"SERIAL {_customerIdSession.SerialNumber} (PENDING)";
+            AppendFirmwareLog($"Serial {_customerIdSession.SerialNumber} and Customer ID {_customerIdSession.CustomerId} are persisted; retries will reuse both.");
+            SetStatus($"Assigned serial {_customerIdSession.SerialNumber} and Customer ID {_customerIdSession.CustomerId} are ready. Generate the key package next.");
         }
         catch (Exception ex)
         {
@@ -779,16 +797,17 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void ApplyStepperIdentity(StepperIdentity identity, string? customerIdOverride = null)
+    private void ApplyStepperIdentity(StepperIdentity identity, string? customerIdOverride = null, string? serialOverride = null)
     {
         var effectiveCustomerId = customerIdOverride ?? identity.CustomerId10;
+        var effectiveSerial = serialOverride ?? identity.SerialNumber;
         _currentCdi = new CardIdentityCdi
         {
-            SerialNumber = identity.SerialNumber,
+            SerialNumber = effectiveSerial,
             DeviceId = identity.DeviceId96,
             CustomerId = effectiveCustomerId
         };
-        FindNameInPages<TextBlock>("IdentitySerial")!.Text = identity.SerialNumber;
+        FindNameInPages<TextBlock>("IdentitySerial")!.Text = serialOverride is null ? effectiveSerial : $"{effectiveSerial} (pending first flash)";
         FindNameInPages<TextBlock>("IdentityFirmware")!.Text = identity.FirmwareVersion;
         FindNameInPages<TextBlock>("IdentityProduct")!.Text = $"Code {identity.ProductCode} / HW {identity.HardwareRevision}";
         FindNameInPages<TextBox>("IdentityUid")!.Text = identity.DeviceId96;
@@ -799,7 +818,7 @@ public sealed partial class MainWindow : Window
         FindNameInPages<TextBox>("KeyDeviceId")!.Text = _currentCdi.DeviceId;
         FindNameInPages<TextBox>("KeyCustomerId")!.Text = _currentCdi.CustomerId;
         var provisioningValue = FindNameInPages<TextBlock>("CustomerIdProvisioningValue");
-        if (provisioningValue is not null) provisioningValue.Text = customerIdOverride is null ? effectiveCustomerId : $"{effectiveCustomerId}  •  PENDING FLASH";
+        if (provisioningValue is not null) provisioningValue.Text = customerIdOverride is null ? effectiveCustomerId : $"{effectiveSerial}  /  {effectiveCustomerId}  •  PENDING FLASH";
     }
 
     private async Task RefreshStepperIdentityAsync()
@@ -811,7 +830,7 @@ public sealed partial class MainWindow : Window
         }
 
         _stepperIdentity = await _stepperModbus.ReadIdentityAsync();
-        ApplyStepperIdentity(_stepperIdentity, _customerIdSession?.CustomerId);
+        ApplyStepperIdentity(_stepperIdentity, _customerIdSession?.CustomerId, _customerIdSession?.SerialNumber);
         if (_deviceProfile == "stepper") await RefreshStepperLiveStatusAsync();
         SetStatus($"{_firmwareTarget.DisplayName} identity registers refreshed.");
     }
@@ -1002,6 +1021,8 @@ public sealed partial class MainWindow : Window
             AppendFirmwareLog("Flash completed. Waiting for card restart, then verifying Modbus identity...");
             await Task.Delay(1500);
             _stepperIdentity = await _stepperModbus.ConnectAndReadIdentityAsync(selectedPort.PortName, baud, slave);
+            if (!string.Equals(_stepperIdentity.SerialNumber, expectedCdi.SerialNumber, StringComparison.Ordinal))
+                throw new InvalidOperationException($"Serial readback mismatch. Expected {expectedCdi.SerialNumber}, card returned {_stepperIdentity.SerialNumber}.");
             if (!string.Equals(_stepperIdentity.CustomerId10, expectedCdi.CustomerId, StringComparison.Ordinal))
                 throw new InvalidOperationException($"Customer ID readback mismatch. Expected {expectedCdi.CustomerId}, card returned {_stepperIdentity.CustomerId10}.");
             ApplyStepperIdentity(_stepperIdentity);

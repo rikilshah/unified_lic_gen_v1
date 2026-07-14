@@ -6,7 +6,8 @@ public sealed record FirmwareTargetProfile(
     string RepositoryUrl,
     string LocalRoot,
     string BuildPreset,
-    string ElfFileName)
+    string ElfFileName,
+    char SerialPrefix)
 {
     public string ElfPath => Path.Combine(LocalRoot, "build", BuildPreset, ElfFileName);
 
@@ -14,13 +15,13 @@ public sealed record FirmwareTargetProfile(
         "stepper", "Stepper Motion Card",
         "https://github.com/rikilshah/stepper_control_card_v2",
         @"D:\stm32_vscode\stepper_control_card_v2",
-        "MinSizeRel", "STEPPER_CONTROL_CARD_V2.elf");
+        "MinSizeRel", "STEPPER_CONTROL_CARD_V2.elf", 'S');
 
     public static FirmwareTargetProfile Asm { get; } = new(
         "asm", "ASM I/O Card",
         "https://github.com/rikilshah/VCB240002",
         @"D:\stm32_vscode\VCB240002",
-        "Release", "VCB240002_2_0.elf");
+        "Release", "VCB240002_2_0.elf", 'A');
 
     public static FirmwareTargetProfile FromId(string id) =>
         string.Equals(id, Asm.Id, StringComparison.OrdinalIgnoreCase) ? Asm : Stepper;
