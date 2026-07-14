@@ -10,7 +10,6 @@ public sealed class FirmwareProvisioningService
     public const string DefaultCmakePath = @"C:\ST\STM32CubeCLT_1.15.0\CMake\bin\cmake.exe";
     public const string DefaultProgrammerPath = @"C:\ST\STM32CubeCLT_1.15.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe";
     public const string DefaultGitPath = @"C:\Program Files\Git\cmd\git.exe";
-    public const string BlankCardFlashConfirmation = "000000000";
 
     private readonly string _firmwareRoot;
     private readonly string _cmakePath;
@@ -133,15 +132,12 @@ public sealed class FirmwareProvisioningService
 
     public async Task<ExternalCommandResult> FlashDefaultAsync(
         string confirmation,
-        string expectedConfirmation,
+        char requiredSerialPrefix,
         CancellationToken cancellationToken = default)
     {
-        var expectedIsSerial = expectedConfirmation is { Length: 9 } &&
-            char.IsLetter(expectedConfirmation[0]) && expectedConfirmation[1..].All(char.IsDigit);
-        if (!expectedIsSerial && !string.Equals(expectedConfirmation, BlankCardFlashConfirmation, StringComparison.Ordinal))
-            throw new ArgumentException("Expected default-flash confirmation must be a valid card serial or 000000000.", nameof(expectedConfirmation));
-        if (!string.Equals(confirmation?.Trim(), expectedConfirmation, StringComparison.Ordinal))
-            throw new InvalidOperationException($"Default flash confirmation must exactly match {expectedConfirmation}.");
+        var normalized = confirmation?.Trim().ToUpperInvariant() ?? string.Empty;
+        if (normalized is not { Length: 9 } || normalized[0] != char.ToUpperInvariant(requiredSerialPrefix) || !normalized[1..].All(char.IsDigit))
+            throw new InvalidOperationException($"Default flash confirmation must use {char.ToUpperInvariant(requiredSerialPrefix)}YYMMDDSS format.");
         if (!File.Exists(ElfPath)) throw new FileNotFoundException("Built default firmware ELF was not found. Build successfully before flashing.", ElfPath);
 
         var probe = await ProbeStLinkAsync(cancellationToken).ConfigureAwait(false);

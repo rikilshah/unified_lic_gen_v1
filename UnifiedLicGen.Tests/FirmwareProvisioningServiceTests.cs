@@ -122,13 +122,21 @@ public sealed class FirmwareProvisioningServiceTests
     }
 
     [Fact]
-    public async Task FlashDefaultAsync_RejectsWrongConfirmationWithoutModbusIdentity()
+    public async Task FlashDefaultAsync_RejectsWrongHardwareSerialFormat()
     {
         var service = new FirmwareProvisioningService("missing-root", "missing-cmake", "missing-programmer");
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.FlashDefaultAsync("S26050606", FirmwareProvisioningService.BlankCardFlashConfirmation));
+            service.FlashDefaultAsync("A26050605", 'S'));
 
-        Assert.Contains(FirmwareProvisioningService.BlankCardFlashConfirmation, error.Message);
+        Assert.Contains("SYYMMDDSS", error.Message);
+    }
+
+    [Fact]
+    public async Task FlashDefaultAsync_AcceptsAnyValidHardwareSerialBeforeCheckingArtifact()
+    {
+        var service = new FirmwareProvisioningService("missing-root", "missing-cmake", "missing-programmer");
+
+        await Assert.ThrowsAsync<FileNotFoundException>(() => service.FlashDefaultAsync("S99123199", 'S'));
     }
 }

@@ -753,8 +753,8 @@ public sealed partial class MainWindow : Window
         }
 
         var selected = (HardwareProfileBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "auto";
-        _deviceProfile = selected == "auto" ? "stepper" : selected;
-        SetFirmwareTarget(FirmwareTargetProfile.FromId(_deviceProfile));
+        var requestedProfile = selected == "auto" ? null : FirmwareTargetProfile.FromId(selected);
+        if (requestedProfile is not null) SetFirmwareTarget(requestedProfile);
 
         try
         {
@@ -762,6 +762,12 @@ public sealed partial class MainWindow : Window
             var slave = checked((byte)Math.Round(SlaveIdBox.Value));
             SetStatus($"Opening {selectedPort.PortName} at {baud} baud, slave {slave}...");
             _stepperIdentity = await _stepperModbus.ConnectAndReadIdentityAsync(selectedPort.PortName, baud, slave);
+            var detectedProfile = FirmwareTargetProfile.FromSerial(_stepperIdentity.SerialNumber);
+            if (detectedProfile is null && requestedProfile is null)
+                throw new InvalidDataException($"Automatic hardware detection could not classify serial {_stepperIdentity.SerialNumber}. Select ASM or Stepper explicitly.");
+            var effectiveProfile = detectedProfile ?? requestedProfile!;
+            _deviceProfile = effectiveProfile.Id;
+            SetFirmwareTarget(effectiveProfile);
             _connected = true;
             _authorized = false;
             _customerIdSession = null;
@@ -1147,11 +1153,10 @@ public sealed partial class MainWindow : Window
             SetStatus("Acknowledge the physical ST-LINK target before default flashing.");
             return;
         }
-        var confirmation = FlashSerialConfirmation.Text?.Trim() ?? string.Empty;
-        var expectedConfirmation = GetDefaultFlashConfirmation();
-        if (!string.Equals(confirmation, expectedConfirmation, StringComparison.Ordinal))
+        var confirmation = CustomerIdProvisioningService.NormalizeSerial(FlashSerialConfirmation.Text);
+        if (!CustomerIdProvisioningService.IsValidSerial(confirmation) || confirmation[0] != _firmwareTarget.SerialPrefix)
         {
-            SetStatus($"Type {expectedConfirmation} to confirm the default flash.");
+            SetStatus($"Enter any valid {_firmwareTarget.SerialPrefix}YYMMDDSS serial to confirm the default flash.");
             return;
         }
         try
@@ -1167,7 +1172,7 @@ public sealed partial class MainWindow : Window
             AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(51, 43, 55, 70));
             ConnectionDot.Fill = Brush("WarningBrush");
             ConnectionText.Text = "SWD flashing";
-            var flash = await _firmwareProvisioning.FlashDefaultAsync(confirmation, expectedConfirmation);
+            var flash = await _firmwareProvisioning.FlashDefaultAsync(confirmation, _firmwareTarget.SerialPrefix);
             if (!flash.Succeeded) throw new InvalidOperationException($"STM32CubeProgrammer returned exit code {flash.ExitCode}.");
             _defaultFirmwareFlashSucceeded = true;
             _defaultBaselineVerified = false;
@@ -1298,26 +1303,17 @@ public sealed partial class MainWindow : Window
             return;
         }
         _flashDefaultRequested = true;
-        var expectedConfirmation = GetDefaultFlashConfirmation();
         var modbusIdentity = _stepperModbus.IsConnected && _stepperIdentity is not null
             ? $"Serial {_stepperIdentity.SerialNumber}"
-            : "Unavailable - blank-card fallback";
-        FlashSummaryText.Text = $"DEFAULT FIRMWARE{Environment.NewLine}{Environment.NewLine}Hardware: {_firmwareTarget.DisplayName}{Environment.NewLine}Modbus identity: {modbusIdentity}{Environment.NewLine}Confirmation: {expectedConfirmation}{Environment.NewLine}Firmware: {_firmwareProvisioning.ElfPath}";
-        FlashSerialConfirmation.Header = $"Type {expectedConfirmation} to confirm";
+            : "Unavailable - SWD-only blank card";
+        FlashSummaryText.Text = $"DEFAULT FIRMWARE{Environment.NewLine}{Environment.NewLine}Hardware: {_firmwareTarget.DisplayName}{Environment.NewLine}Modbus identity: {modbusIdentity}{Environment.NewLine}Confirmation: any valid {_firmwareTarget.SerialPrefix}YYMMDDSS serial{Environment.NewLine}Firmware: {_firmwareProvisioning.ElfPath}";
+        FlashSerialConfirmation.Header = $"Enter {_firmwareTarget.SerialPrefix}YYMMDDSS serial to confirm";
         FlashSerialConfirmation.Text = string.Empty;
         FlashAcknowledge.IsChecked = false;
         FlashProgressPanel.Visibility = Visibility.Collapsed;
         FinalFlashButton.IsEnabled = true;
         PositionFlashSummary();
         FlashSummaryPopup.IsOpen = true;
-    }
-
-    private string GetDefaultFlashConfirmation()
-    {
-        if (_stepperModbus.IsConnected && _stepperIdentity is not null &&
-            CustomerIdProvisioningService.IsValidSerial(_stepperIdentity.SerialNumber))
-            return _stepperIdentity.SerialNumber;
-        return FirmwareProvisioningService.BlankCardFlashConfirmation;
     }
 
     private void ShowFlashSummary()

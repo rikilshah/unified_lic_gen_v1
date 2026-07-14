@@ -233,6 +233,8 @@ Initial modules:
 
 Auto-detection should use stable product code, hardware revision, firmware signature, or a safe read-only probe. If detection is ambiguous, ask the operator to select the device profile; never probe by writing.
 
+Current firmware sources both publish product code `1`, so the implemented discriminator is the validated live serial namespace: `A` means ASM and `S` means Stepper. An unknown prefix is ambiguous and requires explicit profile selection.
+
 ## 5. Proposed Solution Architecture
 
 Target one supported runtime across all projects, preferably .NET 10 if deployment machines support it; otherwise move Keygen down to .NET 8. Do not mix target frameworks inside the first unified executable without a deliberate compatibility reason.
