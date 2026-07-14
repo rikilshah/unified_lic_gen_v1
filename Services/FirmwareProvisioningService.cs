@@ -13,18 +13,36 @@ public sealed class FirmwareProvisioningService
     private readonly string _firmwareRoot;
     private readonly string _cmakePath;
     private readonly string _programmerPath;
+    private readonly string _buildPreset;
+    private readonly string _elfFileName;
+
+    public FirmwareProvisioningService(
+        FirmwareTargetProfile profile,
+        string cmakePath = DefaultCmakePath,
+        string programmerPath = DefaultProgrammerPath)
+        : this(profile.LocalRoot, cmakePath, programmerPath, profile.BuildPreset, profile.ElfFileName)
+    {
+        Profile = profile;
+    }
 
     public FirmwareProvisioningService(
         string firmwareRoot = DefaultFirmwareRoot,
         string cmakePath = DefaultCmakePath,
-        string programmerPath = DefaultProgrammerPath)
+        string programmerPath = DefaultProgrammerPath,
+        string buildPreset = "MinSizeRel",
+        string elfFileName = "STEPPER_CONTROL_CARD_V2.elf")
     {
         _firmwareRoot = firmwareRoot;
         _cmakePath = cmakePath;
         _programmerPath = programmerPath;
+        _buildPreset = buildPreset;
+        _elfFileName = elfFileName;
     }
 
-    public string ElfPath => Path.Combine(_firmwareRoot, "build", "MinSizeRel", "STEPPER_CONTROL_CARD_V2.elf");
+    public FirmwareTargetProfile? Profile { get; }
+    public string FirmwareRoot => _firmwareRoot;
+    public string BuildPreset => _buildPreset;
+    public string ElfPath => Path.Combine(_firmwareRoot, "build", _buildPreset, _elfFileName);
 
     public async Task<FirmwarePreparationResult> PrepareIdentityHeadersAsync(
         CardIdentityCdi cdi,
@@ -56,8 +74,16 @@ public sealed class FirmwareProvisioningService
         return new FirmwarePreparationResult(backupFolder, publicKeyTarget, customerTarget, serialTarget);
     }
 
-    public Task<ExternalCommandResult> BuildAsync(CancellationToken cancellationToken = default) =>
-        RunAsync(_cmakePath, ["--build", "--preset", "MinSizeRel", "--clean-first"], _firmwareRoot, TimeSpan.FromMinutes(3), cancellationToken);
+    public async Task<ExternalCommandResult> BuildAsync(CancellationToken cancellationToken = default)
+    {
+        var configure = await RunAsync(
+            _cmakePath, ["--preset", _buildPreset], _firmwareRoot, TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
+        if (!configure.Succeeded) return configure;
+
+        var build = await RunAsync(
+            _cmakePath, ["--build", "--preset", _buildPreset, "--clean-first"], _firmwareRoot, TimeSpan.FromMinutes(3), cancellationToken).ConfigureAwait(false);
+        return new ExternalCommandResult(build.ExitCode, configure.Output + Environment.NewLine + build.Output);
+    }
 
     public async Task<ExternalCommandResult> ProbeStLinkAsync(CancellationToken cancellationToken = default)
     {
@@ -115,6 +141,16 @@ public sealed class FirmwareProvisioningService
         #define APP_CUST_ID_CHAR_COUNT ((uint16_t) (sizeof(APP_CUST_ID_TEXT) - 1U))
         #define APP_CUST_ID_DIGIT(index) ((uint64_t) ((uint8_t) APP_CUST_ID_TEXT[(index)] - (uint8_t) '0'))
         #define APP_CUST_ID_DEC2(index) ((uint16_t) ((APP_CUST_ID_DIGIT(index) * 10ULL) + APP_CUST_ID_DIGIT((index) + 1U)))
+        #define APP_CUST_ID_VALUE_U64 \
+            ((APP_CUST_ID_DIGIT(0) * 1000000000ULL) + \
+             (APP_CUST_ID_DIGIT(1) * 100000000ULL) + \
+             (APP_CUST_ID_DIGIT(2) * 10000000ULL) + \
+             (APP_CUST_ID_DIGIT(3) * 1000000ULL) + \
+             (APP_CUST_ID_DIGIT(4) * 100000ULL) + \
+             (APP_CUST_ID_DIGIT(5) * 10000ULL) + \
+             (APP_CUST_ID_DIGIT(6) * 1000ULL) + \
+             (APP_CUST_ID_DIGIT(7) * 100ULL) + \
+             (APP_CUST_ID_DIGIT(8) * 10ULL) + APP_CUST_ID_DIGIT(9))
         _Static_assert(APP_CUST_ID_CHAR_COUNT == 10U, "APP_CUST_ID_TEXT must be a 10-digit decimal string");
         #define APP_CUST_ID_WORD0 0x0000U
         #define APP_CUST_ID_WORD1 APP_CUST_ID_DEC2(0)
@@ -122,6 +158,7 @@ public sealed class FirmwareProvisioningService
         #define APP_CUST_ID_WORD3 APP_CUST_ID_DEC2(4)
         #define APP_CUST_ID_WORD4 APP_CUST_ID_DEC2(6)
         #define APP_CUST_ID_WORD5 APP_CUST_ID_DEC2(8)
+        #define APP_CUST_ID_LEGACY32 ((uint32_t) (APP_CUST_ID_VALUE_U64 & 0xFFFFFFFFULL))
         static const uint16_t APP_CUST_ID_WORDS[APP_CUST_ID_WORD_COUNT] = {
             APP_CUST_ID_WORD0, APP_CUST_ID_WORD1, APP_CUST_ID_WORD2,
             APP_CUST_ID_WORD3, APP_CUST_ID_WORD4, APP_CUST_ID_WORD5,

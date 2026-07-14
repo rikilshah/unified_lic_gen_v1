@@ -337,7 +337,7 @@ Display a human-readable deny reason while retaining detailed error data in logs
 
 #### Firmware Provisioning
 
-For the Stepper Control Card, provide a guarded workflow that stages generated identity headers into the firmware source, performs a clean MinSizeRel build, probes the SWD target, flashes the ELF, reconnects over Modbus, and validates live identity against the generated manifest. Keep this on a dedicated page with an operation log.
+For both supported cards, provide a guarded workflow that persists blank-card Customer ID truth, stages generated identity headers into the selected firmware source, configures and clean-builds its hardware-specific profile, probes the SWD target, flashes the ELF, reconnects over Modbus, and validates live identity against the generated manifest. Keep this on a dedicated page with an operation log.
 
 Flash requires all prior stages, physical-target acknowledgement, and exact entry of the card serial. Never change RDP option bytes automatically; an unlock can mass-erase the target. See [FIRMWARE_PROVISIONING_AND_FLASH.md](FIRMWARE_PROVISIONING_AND_FLASH.md) for the implemented flow.
 
@@ -470,7 +470,7 @@ Exit criterion: each supported card can complete a repeatable, auditable test wo
 - verify x64 deployment first, then x86/ARM64 only if required;
 - publish as a folder/MSIX-compatible layout, not a fragile single-file WinUI binary.
 
-### Phase 7 - Guarded Stepper firmware provisioning
+### Phase 7 - Guarded unified firmware provisioning
 
 - stage `card_public_key.h`, `customer_id_config.h`, and `serial_number_config.h` with timestamped backups;
 - run a clean MinSizeRel build and retain tool output in the UI log;
@@ -478,7 +478,7 @@ Exit criterion: each supported card can complete a repeatable, auditable test wo
 - require acknowledgement and exact serial confirmation before programming;
 - reconnect over Modbus after reset and compare live identity with the generated manifest.
 
-Exit criterion: the dashboard completes a confirmed Stepper update and only declares success after identity readback passes.
+Exit criterion: the dashboard completes a confirmed ASM or Stepper update and only declares success after exact Customer ID and manifest identity readback pass.
 
 ## 10. Migration Map
 
@@ -526,6 +526,6 @@ Exit criterion: the dashboard completes a confirmed Stepper update and only decl
 
 For the lowest-risk useful release, include the unified shell, serial connection, identity, manifest authorization, embedded Keygen workflow, guarded Stepper firmware provisioning, manual ASM/stepper controls, recommended test suites, and JSON/Markdown reports. Defer arbitrary register writes, remote fleet management, unattended or batch firmware flashing, and generalized plugin loading until the core lifecycle is stable on real hardware.
 
-## 14. Pending Blank-Card Customer ID Provisioning
+## 14. Blank-Card Customer ID Provisioning
 
-The agreed SOP is recorded in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md). Both firmware repositories are available; implementation remains intentionally paused until their header contracts, build/flash procedures, and identity register maps are reviewed.
+The implemented SOP is recorded in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md). It supports both firmware repositories, persists final truth before flashing, configures the correct build preset, and fails closed on Customer ID or manifest readback mismatch.

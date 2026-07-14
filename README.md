@@ -1,12 +1,12 @@
 # Unified Test & Keygen Dashboard
 
-Windows dashboard for CDI capture, P-256 key generation, manifest authorization, ASM and Stepper diagnostics, and guarded Stepper firmware provisioning.
+Windows dashboard for CDI capture, blank-card Customer ID assignment, P-256 key generation, manifest authorization, ASM and Stepper diagnostics, and guarded firmware provisioning.
 
 ## Documentation
 
 - [Design system and UX rules](DESIGN.md)
 - [Project context and unified architecture](UNIFIED_TEST_KEYGEN_DASHBOARD_CONTEXT.md)
-- [Stepper firmware provisioning and flash runbook](FIRMWARE_PROVISIONING_AND_FLASH.md)
+- [Unified firmware provisioning and flash runbook](FIRMWARE_PROVISIONING_AND_FLASH.md)
 - [Customer ID provisioning SOP](CUSTOMER_ID_PROVISIONING_SOP.md)
 
 ## Source Repositories

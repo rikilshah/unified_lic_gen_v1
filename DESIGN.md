@@ -70,6 +70,8 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 - Flash remains disabled until identity headers are prepared, a clean build succeeds, and the connected ST-LINK target is probed.
 - A destructive-action warning, explicit acknowledgement, and an exact card-serial confirmation are required before flash.
 - Firmware success means the board restarted, Modbus reconnected, and the live identity matched the generated manifest; process exit alone is not success.
+- A blank card reporting `0000000000` receives one persisted random Customer ID; retries and restarts recover it rather than generating a replacement.
+- Firmware target selection is locked to the connected hardware profile, with distinct ASM and Stepper build artifacts.
 
 ## Decisions Log
 
@@ -83,3 +85,4 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 | 2026-07-14 | GitHub repositories are authoritative | Dashboard and firmware changes must start from synchronized GitHub sources; local checkouts are working copies only. |
 | 2026-07-14 | Blank-card Customer ID becomes final truth | Generate once during first provisioning, flash it, and validate readback without silently replacing it. Implementation remains pending both firmware repositories. |
 | 2026-07-14 | ASM firmware source established | `rikilshah/VCB240002` is the authoritative ASM firmware repository; both firmware sources must be reviewed before Customer ID implementation. |
+| 2026-07-14 | Unified blank-card provisioning implemented | ASM and Stepper share Customer ID generation, persistence, header staging, flash confirmation, and exact readback while retaining hardware-specific builds. |

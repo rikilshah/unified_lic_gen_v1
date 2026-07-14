@@ -1,6 +1,6 @@
 # Blank-Card Customer ID Provisioning SOP
 
-Status: **Documented, pending implementation**
+Status: **Implemented; physical first-flash validation pending**
 
 Date agreed: 2026-07-14
 
@@ -24,7 +24,7 @@ Local source folders are working checkouts only and must be synchronized with th
 4. Other repeated digits are allowed.
 5. Use the same generation and validation rules for both hardware models. There is no test/production difference.
 
-## Planned Provisioning Flow
+## Implemented Provisioning Flow
 
 1. Start a first-provisioning session for a blank card.
 2. Generate one valid Customer ID and store it in the dashboard session before modifying firmware.
@@ -48,8 +48,19 @@ Local source folders are working checkouts only and must be synchronized with th
 - Do not generate a replacement automatically after build, flash, reconnect, or validation failure.
 - A mismatch fails closed and must not authorize the card.
 - A retry must reuse the same stored Customer ID unless the operator explicitly abandons the uncommitted provisioning session before a successful flash.
-- The persisted session format and recovery behavior will be finalized during implementation so an application restart cannot accidentally assign a different identity to a partially provisioned card.
+- The session is persisted as `customer_id_provisioning_session.json` under the card folder in `PCB_LIC_DB`; an application restart recovers the same identity for the same serial, device ID, and hardware profile.
 
-## Implementation Gate
+## Hardware Profiles
 
-Both firmware repositories are now available. No dashboard code will be changed for this SOP until both implementations of `customer_id_config.h`, their build/flash procedures, and their identity register maps have been reviewed.
+- Stepper: `MinSizeRel`, output `build/MinSizeRel/STEPPER_CONTROL_CARD_V2.elf`.
+- ASM: `Release`, output `build/Release/VCB240002_2_0.elf`.
+- Both publish the 10-digit Customer ID in input registers `10..15` and use `Core/Inc/customer_id_config.h`.
+- The generated shared header also supplies `APP_CUST_ID_LEGACY32`, which the ASM firmware requires.
+
+## Verification
+
+- Dashboard build: passed with zero warnings and errors.
+- Automated tests: 17 passed, including 1,000 generated IDs, invalid subsequences, persistence/recovery, hardware mismatch rejection, profile artifacts, and header compatibility.
+- Stepper firmware clean build from synchronized `main`: passed.
+- ASM firmware configure plus clean build from synchronized `main`: passed.
+- No physical flash was executed during automated verification.

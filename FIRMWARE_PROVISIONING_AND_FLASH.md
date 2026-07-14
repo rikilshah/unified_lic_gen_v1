@@ -1,30 +1,30 @@
-# Stepper Firmware Provisioning and Flash
+# Unified Firmware Provisioning and Flash
 
 ## Status
 
-The Unified Test & Keygen Dashboard now provides a guarded end-to-end firmware workflow for the Stepper Control Card. It prepares identity headers, builds firmware, detects the SWD target, flashes the image, reconnects to Modbus, and validates the identity readback.
+The Unified Test & Keygen Dashboard provides a guarded end-to-end workflow for both Stepper and ASM cards. It recovers or generates blank-card identity, prepares headers, configures and builds the correct firmware profile, detects the SWD target, flashes the image, reconnects to Modbus, and validates exact identity readback.
 
 Authoritative firmware source: [rikilshah/stepper_control_card_v2](https://github.com/rikilshah/stepper_control_card_v2)
 
 Expected local checkout for the currently implemented tooling: `D:\stm32_vscode\stepper_control_card_v2`. The GitHub repository is the source of truth; the local checkout must be synchronized before preparing or building firmware.
 
-This does not add firmware flashing for the ASM card. The two card families remain separate hardware modules even though they share the CDI, key-generation, manifest, and authorization workflow.
+ASM firmware source: [rikilshah/VCB240002](https://github.com/rikilshah/VCB240002), expected at `D:\stm32_vscode\VCB240002`.
 
 ## Operator Workflow
 
-1. Connect to the Stepper card and read its CDI identity.
-2. Generate and export the manifest package from Keygen & Provisioning.
-3. Open **Firmware provisioning**.
-4. Select **Prepare identity headers**.
-5. Select **Clean build firmware**. Flash remains unavailable if the build fails.
-6. Connect the intended board through ST-LINK and select **Detect target**.
-7. Confirm that the physical target is safe to program, then type the exact card serial shown by the dashboard.
-8. Select **Flash firmware and verify**.
-9. The dashboard disconnects Modbus, programs and starts the ELF, reconnects to the saved COM settings, loads the generated manifest, and compares the live card identity. Only a successful readback is reported as complete.
+1. Select the correct hardware profile and connect to the card.
+2. If the card reports `0000000000`, the dashboard generates or recovers one persisted valid Customer ID and marks it pending first flash.
+3. Generate and export the manifest package using that effective CDI.
+4. Open **Firmware provisioning** and confirm the firmware target matches the connected card.
+5. Prepare identity headers, then configure and clean-build the hardware-specific preset.
+6. Detect the intended ST-LINK target.
+7. Acknowledge the physical target and type the exact card serial.
+8. Flash and verify. Once flashing starts, the persisted Customer ID is final truth and retries reuse it.
+9. The dashboard reconnects using the saved COM settings and requires exact Customer ID plus manifest identity readback before success.
 
 The operation log records every stage and the external tool output needed to diagnose a failure.
 
-The planned blank-card Customer ID generation step is documented separately in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md). It is not implemented yet.
+Customer ID generation and recovery are specified in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md).
 
 ## Files and Tools
 
@@ -40,8 +40,9 @@ Defaults:
 
 - CMake: `C:\ST\STM32CubeCLT_1.15.0\CMake\bin\cmake.exe`
 - STM32 Programmer: `C:\ST\STM32CubeCLT_1.15.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe`
-- Build preset: `MinSizeRel`, always with `--clean-first`
-- Flash image: `build\MinSizeRel\STEPPER_CONTROL_CARD_V2.elf`
+- Stepper: configure/build preset `MinSizeRel`; `build\MinSizeRel\STEPPER_CONTROL_CARD_V2.elf`
+- ASM: configure/build preset `Release`; `build\Release\VCB240002_2_0.elf`
+- Every build configures the selected preset first, then runs `--clean-first`.
 
 ## Safety Gates
 
@@ -51,6 +52,8 @@ Defaults:
 - Confirmation text must exactly equal the intended card serial.
 - RDP level 1 or 2 is rejected. The dashboard never changes option bytes or attempts an automatic unlock because that may erase the target.
 - Programmer exit code zero is insufficient: the board must reconnect through Modbus and pass manifest identity validation.
+- A blank-card Customer ID is persisted before header modification and cannot be silently regenerated after flashing begins.
+- The firmware target cannot be changed away from the connected hardware profile.
 
 ## Failure Recovery
 
@@ -66,10 +69,9 @@ Defaults:
 Verification was performed without programming a physical board:
 
 - Unified dashboard build: successful with zero warnings and errors.
-- Automated tests: 7 passed, including header backup/staging and serial-confirmation rejection.
-- Stepper clean MinSizeRel build: successful.
-- Firmware: 24,696 bytes of 32 KB flash (75.37%).
-- RAM: 3,440 bytes of 4 KB (83.98%).
+- Automated tests: 17 passed.
+- Stepper clean MinSizeRel build from `main`: 24,180 bytes flash (73.79%), 3,448 bytes RAM (84.18%).
+- ASM clean Release build from `main`: 14,180 bytes flash (43.27%), 1,696 bytes RAM (41.41%).
 - ST-LINK: STM32F03x detected at 3.27 V.
 
 No flash command was executed during automated implementation verification.

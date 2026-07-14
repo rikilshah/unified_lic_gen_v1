@@ -25,13 +25,16 @@ public sealed partial class MainWindow : Window
     private readonly SerialPortScanner _serialPortScanner = new();
     private readonly StepperModbusService _stepperModbus = new();
     private readonly CdiStorageService _cdiStorage = new();
+    private readonly CustomerIdProvisioningService _customerIdProvisioning = new();
     private StepperIdentity? _stepperIdentity;
+    private CustomerIdProvisioningSession? _customerIdSession;
     private CardIdentityCdi? _currentCdi;
     private string? _currentCdiPath;
     private readonly CardManifestService _manifestService = new();
     private CardManifest? _loadedManifest;
     private string? _loadedManifestPath;
-    private readonly FirmwareProvisioningService _firmwareProvisioning = new();
+    private FirmwareTargetProfile _firmwareTarget = FirmwareTargetProfile.Stepper;
+    private FirmwareProvisioningService _firmwareProvisioning = new(FirmwareTargetProfile.Stepper);
     private bool _firmwarePrepared;
     private bool _firmwareBuilt;
     private bool _stLinkReady;
@@ -205,11 +208,23 @@ public sealed partial class MainWindow : Window
         });
 
         var target = Card("Target and prerequisites");
-        target.Children.Add(KeyValue("Firmware source", FirmwareProvisioningService.DefaultFirmwareRoot));
-        target.Children.Add(KeyValue("Build output", _firmwareProvisioning.ElfPath));
+        var hardware = new ComboBox { Name = "FirmwareHardwareTarget", Header = "Firmware target", SelectedIndex = 0, MinWidth = 280 };
+        hardware.Items.Add(new ComboBoxItem { Content = "Stepper Motion Card", Tag = "stepper" });
+        hardware.Items.Add(new ComboBoxItem { Content = "ASM I/O Card", Tag = "asm" });
+        hardware.SelectionChanged += FirmwareTarget_SelectionChanged;
+        target.Children.Add(hardware);
+        target.Children.Add(RowWith(new TextBlock { Text = "Repository", Width = 180, Foreground = Brush("TextSecondaryBrush") }, new TextBlock { Name = "FirmwareRepository", Text = _firmwareTarget.RepositoryUrl }));
+        target.Children.Add(RowWith(new TextBlock { Text = "Local source", Width = 180, Foreground = Brush("TextSecondaryBrush") }, new TextBlock { Name = "FirmwareSource", Text = _firmwareTarget.LocalRoot }));
+        target.Children.Add(RowWith(new TextBlock { Text = "Build output", Width = 180, Foreground = Brush("TextSecondaryBrush") }, new TextBlock { Name = "FirmwareBuildOutput", Text = _firmwareProvisioning.ElfPath }));
         target.Children.Add(KeyValue("Programmer", FirmwareProvisioningService.DefaultProgrammerPath));
         target.Children.Add(KeyValue("Connected identity", "Generated CDI and manifest package required"));
         root.Children.Add(target);
+
+        var customer = Card("0. Blank-card Customer ID");
+        customer.Children.Add(new TextBlock { Text = "On first connection, generate or recover one persisted 10-digit ID. Three identical consecutive digits are prohibited. This value becomes final truth when flashing starts.", TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush") });
+        customer.Children.Add(new TextBlock { Name = "CustomerIdProvisioningValue", Text = "Connect a blank card (Customer ID 0000000000)", FontFamily = new FontFamily("Cascadia Mono"), FontSize = 22 });
+        customer.Children.Add(ActionButton("Generate / recover Customer ID", async (_, _) => await PrepareBlankCustomerIdAsync(), true));
+        root.Children.Add(customer);
 
         var stages = Columns(3);
         var prepare = Card("1. Prepare identity headers");
@@ -218,7 +233,7 @@ public sealed partial class MainWindow : Window
         stages.Children.Add(new Border { Style = (Style)Application.Current.Resources["CardStyle"], Child = prepare });
 
         var build = Card("2. Clean build");
-        build.Children.Add(new TextBlock { Text = "Run the MinSizeRel CMake clean build and require a new STEPPER_CONTROL_CARD_V2.elf.", TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush") });
+        build.Children.Add(new TextBlock { Text = "Run the hardware profile's clean CMake build and require its exact ELF output.", TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush") });
         build.Children.Add(ActionButton("Build firmware", async (_, _) => await BuildFirmwareAsync(), true));
         stages.Children.Add(new Border { Style = (Style)Application.Current.Resources["CardStyle"], Child = build });
 
@@ -598,11 +613,7 @@ public sealed partial class MainWindow : Window
 
         var selected = (HardwareProfileBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "auto";
         _deviceProfile = selected == "auto" ? "stepper" : selected;
-        if (_deviceProfile != "stepper")
-        {
-            SetStatus("ASM transport migration is not active yet. Select Stepper Motion Card for this firmware.");
-            return;
-        }
+        SetFirmwareTarget(FirmwareTargetProfile.FromId(_deviceProfile));
 
         try
         {
@@ -612,7 +623,18 @@ public sealed partial class MainWindow : Window
             _stepperIdentity = await _stepperModbus.ConnectAndReadIdentityAsync(selectedPort.PortName, baud, slave);
             _connected = true;
             _authorized = false;
-            ApplyStepperIdentity(_stepperIdentity);
+            _customerIdSession = null;
+            if (_stepperIdentity.CustomerId10 == "0000000000")
+            {
+                _customerIdSession = await _customerIdProvisioning.LoadOrCreateAsync(
+                    _stepperIdentity.SerialNumber, _stepperIdentity.DeviceId96, _deviceProfile);
+                ApplyStepperIdentity(_stepperIdentity, _customerIdSession.CustomerId);
+                AppendFirmwareLog($"Blank card detected. Customer ID {_customerIdSession.CustomerId} generated/recovered and persisted.");
+            }
+            else
+            {
+                ApplyStepperIdentity(_stepperIdentity);
+            }
             string cdiResult;
             try
             {
@@ -623,25 +645,26 @@ public sealed partial class MainWindow : Window
             {
                 cdiResult = $" CDI is retained internally, but database save failed: {cdiException.Message}";
             }
-            await RefreshStepperLiveStatusAsync();
+            if (_deviceProfile == "stepper") await RefreshStepperLiveStatusAsync();
             ConnectionDot.Fill = Brush("SuccessBrush"); ConnectionText.Text = "Connected"; DisconnectButton.IsEnabled = true;
-            DeviceTypeText.Text = $"Stepper Motion Card • Product {_stepperIdentity.ProductCode}";
+            DeviceTypeText.Text = $"{_firmwareTarget.DisplayName} • Product {_stepperIdentity.ProductCode}";
             SerialText.Text = $"SERIAL {_stepperIdentity.SerialNumber}"; AuthText.Text = "NOT AUTHORIZED";
             SettingsPopup.IsOpen = false;
-            SetStatus($"Stepper card read through {selectedPort.DisplayName}, slave {slave}. Identity and live registers are available.{cdiResult}");
+            var blankNotice = _customerIdSession is null ? string.Empty : $" Pending Customer ID {_customerIdSession.CustomerId} is ready for keygen and first flash.";
+            SetStatus($"{_firmwareTarget.DisplayName} read through {selectedPort.DisplayName}, slave {slave}. Identity registers are available.{cdiResult}{blankNotice}");
             SelectNavigation("identity");
         }
         catch (Exception ex)
         {
             _connected = false;
-            SetStatus($"Stepper connection/read failed: {ex.Message} Check COM port, 38400 8N1, and firmware slave address 2.");
+            SetStatus($"Card connection/read failed: {ex.Message} Check the selected hardware profile, COM settings, and slave address.");
         }
     }
 
     private async void DisconnectButton_Click(object sender, RoutedEventArgs e)
     {
         await _stepperModbus.DisconnectAsync();
-        _connected = false; _authorized = false; _deviceProfile = "none"; ConnectionDot.Fill = Brush("ErrorBrush"); ConnectionText.Text = "Disconnected"; DeviceTypeText.Text = "No hardware selected"; SerialText.Text = "SERIAL —"; AuthText.Text = "NOT AUTHORIZED"; AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(51, 43, 55, 70)); DisconnectButton.IsEnabled = false; SetStatus("Disconnected. Authorization and hardware writes were cleared.");
+        _connected = false; _authorized = false; _deviceProfile = "none"; _customerIdSession = null; ConnectionDot.Fill = Brush("ErrorBrush"); ConnectionText.Text = "Disconnected"; DeviceTypeText.Text = "No hardware selected"; SerialText.Text = "SERIAL —"; AuthText.Text = "NOT AUTHORIZED"; AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(51, 43, 55, 70)); DisconnectButton.IsEnabled = false; SetStatus("Disconnected. Authorization and hardware writes were cleared.");
     }
 
     private async void RefreshPorts_Click(object sender, RoutedEventArgs e) =>
@@ -696,19 +719,87 @@ public sealed partial class MainWindow : Window
 
     private void SetStatus(string message) => StatusText.Text = $"{DateTime.Now:HH:mm:ss}  {message}";
 
-    private void ApplyStepperIdentity(StepperIdentity identity)
+    private void FirmwareTarget_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        _currentCdi = CardIdentityCdi.FromStepperIdentity(identity);
+        if (sender is not ComboBox box || box.SelectedItem is not ComboBoxItem item) return;
+        var requested = item.Tag?.ToString() ?? "stepper";
+        if (_connected && !string.Equals(requested, _deviceProfile, StringComparison.OrdinalIgnoreCase))
+        {
+            box.SelectedIndex = _deviceProfile == "asm" ? 1 : 0;
+            SetStatus("Firmware target must match the connected hardware profile. Disconnect before changing it.");
+            return;
+        }
+        SetFirmwareTarget(FirmwareTargetProfile.FromId(requested));
+    }
+
+    private void SetFirmwareTarget(FirmwareTargetProfile profile)
+    {
+        _firmwareTarget = profile;
+        _firmwareProvisioning = new FirmwareProvisioningService(profile);
+        _firmwarePrepared = false;
+        _firmwareBuilt = false;
+        _stLinkReady = false;
+        var box = FindNameInPages<ComboBox>("FirmwareHardwareTarget");
+        var expectedIndex = profile.Id == "asm" ? 1 : 0;
+        if (box is not null && box.SelectedIndex != expectedIndex) box.SelectedIndex = expectedIndex;
+        var repository = FindNameInPages<TextBlock>("FirmwareRepository");
+        var source = FindNameInPages<TextBlock>("FirmwareSource");
+        var output = FindNameInPages<TextBlock>("FirmwareBuildOutput");
+        var product = FindNameInPages<TextBox>("ExportProduct");
+        if (repository is not null) repository.Text = profile.RepositoryUrl;
+        if (source is not null) source.Text = profile.LocalRoot;
+        if (output is not null) output.Text = _firmwareProvisioning.ElfPath;
+        if (product is not null) product.Text = profile.Id == "asm" ? "VCB240002 ASM I/O Card" : "Stepper Control Card V2";
+    }
+
+    private async Task PrepareBlankCustomerIdAsync()
+    {
+        if (!_connected || _stepperIdentity is null)
+        {
+            SetStatus("Connect and read a blank card before generating its Customer ID.");
+            return;
+        }
+        if (_stepperIdentity.CustomerId10 != "0000000000" && _customerIdSession is null)
+        {
+            SetStatus($"This card is already provisioned with Customer ID {_stepperIdentity.CustomerId10}. It will not be replaced.");
+            return;
+        }
+
+        try
+        {
+            _customerIdSession ??= await _customerIdProvisioning.LoadOrCreateAsync(
+                _stepperIdentity.SerialNumber, _stepperIdentity.DeviceId96, _deviceProfile);
+            ApplyStepperIdentity(_stepperIdentity, _customerIdSession.CustomerId);
+            AppendFirmwareLog($"Customer ID {_customerIdSession.CustomerId} is persisted for {_stepperIdentity.SerialNumber}; retries will reuse it.");
+            SetStatus($"Customer ID {_customerIdSession.CustomerId} is ready. Generate the key package, then prepare firmware headers.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Customer ID generation/recovery failed: {ex.Message}");
+        }
+    }
+
+    private void ApplyStepperIdentity(StepperIdentity identity, string? customerIdOverride = null)
+    {
+        var effectiveCustomerId = customerIdOverride ?? identity.CustomerId10;
+        _currentCdi = new CardIdentityCdi
+        {
+            SerialNumber = identity.SerialNumber,
+            DeviceId = identity.DeviceId96,
+            CustomerId = effectiveCustomerId
+        };
         FindNameInPages<TextBlock>("IdentitySerial")!.Text = identity.SerialNumber;
         FindNameInPages<TextBlock>("IdentityFirmware")!.Text = identity.FirmwareVersion;
         FindNameInPages<TextBlock>("IdentityProduct")!.Text = $"Code {identity.ProductCode} / HW {identity.HardwareRevision}";
         FindNameInPages<TextBox>("IdentityUid")!.Text = identity.DeviceId96;
-        FindNameInPages<TextBox>("IdentityCustomer")!.Text = identity.CustomerId10;
+        FindNameInPages<TextBox>("IdentityCustomer")!.Text = customerIdOverride is null ? effectiveCustomerId : $"{effectiveCustomerId} (pending first flash)";
         FindNameInPages<TextBox>("IdentityFingerprint")!.Text = identity.PublicKeyFingerprintSha256;
         FindNameInPages<TextBox>("IdentityRawKey")!.Text = identity.PublicKeyRawHex;
         FindNameInPages<TextBox>("KeySerial")!.Text = _currentCdi.SerialNumber;
         FindNameInPages<TextBox>("KeyDeviceId")!.Text = _currentCdi.DeviceId;
         FindNameInPages<TextBox>("KeyCustomerId")!.Text = _currentCdi.CustomerId;
+        var provisioningValue = FindNameInPages<TextBlock>("CustomerIdProvisioningValue");
+        if (provisioningValue is not null) provisioningValue.Text = customerIdOverride is null ? effectiveCustomerId : $"{effectiveCustomerId}  •  PENDING FLASH";
     }
 
     private async Task RefreshStepperIdentityAsync()
@@ -720,9 +811,9 @@ public sealed partial class MainWindow : Window
         }
 
         _stepperIdentity = await _stepperModbus.ReadIdentityAsync();
-        ApplyStepperIdentity(_stepperIdentity);
-        await RefreshStepperLiveStatusAsync();
-        SetStatus("Stepper identity and live registers refreshed.");
+        ApplyStepperIdentity(_stepperIdentity, _customerIdSession?.CustomerId);
+        if (_deviceProfile == "stepper") await RefreshStepperLiveStatusAsync();
+        SetStatus($"{_firmwareTarget.DisplayName} identity registers refreshed.");
     }
 
     private async Task SaveCurrentCdiAsync()
@@ -792,6 +883,10 @@ public sealed partial class MainWindow : Window
             "card_public_key.h");
         try
         {
+            if (!string.Equals(_firmwareTarget.Id, _deviceProfile, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Firmware target does not match the connected hardware profile.");
+            if (_stepperIdentity?.CustomerId10 == "0000000000" && _customerIdSession is null)
+                throw new InvalidOperationException("Generate or recover the blank card Customer ID before preparing firmware.");
             AppendFirmwareLog($"Preparing identity for {_currentCdi.SerialNumber}...");
             var result = await _firmwareProvisioning.PrepareIdentityHeadersAsync(_currentCdi, generatedHeader);
             _firmwarePrepared = true;
@@ -800,7 +895,7 @@ public sealed partial class MainWindow : Window
             AppendFirmwareLog($"Public key: {result.PublicKeyHeader}");
             AppendFirmwareLog($"Customer ID: {result.CustomerIdHeader}");
             AppendFirmwareLog($"Serial: {result.SerialNumberHeader}");
-            SetStatus("Firmware identity headers prepared. Run a clean build next.");
+            SetStatus($"{_firmwareTarget.DisplayName} identity headers prepared. Run a clean {_firmwareTarget.BuildPreset} build next.");
         }
         catch (Exception ex)
         {
@@ -820,7 +915,7 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            AppendFirmwareLog("Starting MinSizeRel clean build...");
+            AppendFirmwareLog($"Starting {_firmwareTarget.DisplayName} {_firmwareTarget.BuildPreset} clean build...");
             var result = await _firmwareProvisioning.BuildAsync();
             AppendFirmwareLog(result.Output);
             _firmwareBuilt = result.Succeeded && File.Exists(_firmwareProvisioning.ElfPath);
@@ -884,6 +979,7 @@ public sealed partial class MainWindow : Window
 
         var baud = int.Parse(((ComboBoxItem)BaudBox.SelectedItem).Content.ToString()!);
         var slave = checked((byte)Math.Round(SlaveIdBox.Value));
+        var expectedCdi = _currentCdi;
         try
         {
             AppendFirmwareLog($"FLASH AUTHORIZED by typed serial {_currentCdi.SerialNumber}.");
@@ -893,16 +989,24 @@ public sealed partial class MainWindow : Window
             ConnectionDot.Fill = Brush("WarningBrush");
             ConnectionText.Text = "Flashing";
 
-            var flash = await _firmwareProvisioning.FlashAsync(confirmation, _currentCdi);
+            if (_customerIdSession is not null)
+            {
+                await _customerIdProvisioning.MarkFlashStartedAsync(_customerIdSession);
+                AppendFirmwareLog($"Customer ID {_customerIdSession.CustomerId} is now locked as final truth for this provisioning session.");
+            }
+
+            var flash = await _firmwareProvisioning.FlashAsync(confirmation, expectedCdi);
             AppendFirmwareLog(flash.Output);
             if (!flash.Succeeded) throw new InvalidOperationException($"STM32CubeProgrammer returned exit code {flash.ExitCode}.");
 
             AppendFirmwareLog("Flash completed. Waiting for card restart, then verifying Modbus identity...");
             await Task.Delay(1500);
             _stepperIdentity = await _stepperModbus.ConnectAndReadIdentityAsync(selectedPort.PortName, baud, slave);
+            if (!string.Equals(_stepperIdentity.CustomerId10, expectedCdi.CustomerId, StringComparison.Ordinal))
+                throw new InvalidOperationException($"Customer ID readback mismatch. Expected {expectedCdi.CustomerId}, card returned {_stepperIdentity.CustomerId10}.");
             ApplyStepperIdentity(_stepperIdentity);
 
-            var manifestPath = Path.Combine(CdiStorageService.DefaultDatabaseRoot, _currentCdi.SerialNumber, "lic_files", $"{_currentCdi.SerialNumber}_manifest.json");
+            var manifestPath = Path.Combine(CdiStorageService.DefaultDatabaseRoot, expectedCdi.SerialNumber, "lic_files", $"{expectedCdi.SerialNumber}_manifest.json");
             var expectedManifest = await _manifestService.LoadAsync(manifestPath);
             var validation = _manifestService.Validate(_stepperIdentity, expectedManifest);
             ApplyManifestValidation(validation);
@@ -912,8 +1016,15 @@ public sealed partial class MainWindow : Window
             DisconnectButton.IsEnabled = true;
             if (!validation.IsAuthorized) throw new InvalidOperationException($"Flash completed but identity verification failed: {validation.Reason}");
 
+            if (_customerIdSession is not null)
+            {
+                await _customerIdProvisioning.MarkVerifiedAsync(_customerIdSession);
+                AppendFirmwareLog($"Customer ID VERIFIED: {_customerIdSession.CustomerId} exactly matches Modbus readback.");
+            }
+
             AppendFirmwareLog($"FLASH VERIFIED: serial {_stepperIdentity.SerialNumber}, fingerprint {_stepperIdentity.PublicKeyFingerprintSha256}.");
-            SetStatus("Firmware flashed and identity verified successfully.");
+            DeviceTypeText.Text = $"{_firmwareTarget.DisplayName} • Product {_stepperIdentity.ProductCode}";
+            SetStatus($"{_firmwareTarget.DisplayName} firmware, Customer ID, and manifest identity verified successfully.");
         }
         catch (Exception ex)
         {

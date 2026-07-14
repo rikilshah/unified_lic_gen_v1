@@ -27,6 +27,7 @@ public sealed class FirmwareProvisioningServiceTests
 
             Assert.Equal("#define DEVICE_PUBKEY_WORD00 0xADB9U", await File.ReadAllTextAsync(result.PublicKeyHeader));
             Assert.Contains("APP_CUST_ID_TEXT \"3792822696\"", await File.ReadAllTextAsync(result.CustomerIdHeader));
+            Assert.Contains("APP_CUST_ID_LEGACY32", await File.ReadAllTextAsync(result.CustomerIdHeader));
             Assert.Contains("APP_SERIAL_NUMBER_TEXT \"S26050606\"", await File.ReadAllTextAsync(result.SerialNumberHeader));
             Assert.Equal("old-key", await File.ReadAllTextAsync(Path.Combine(result.BackupFolder, "card_public_key.h")));
             Assert.Equal("old-customer", await File.ReadAllTextAsync(Path.Combine(result.BackupFolder, "customer_id_config.h")));
@@ -36,6 +37,15 @@ public sealed class FirmwareProvisioningServiceTests
         {
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void AsmProfile_UsesItsReleaseArtifact()
+    {
+        var service = new FirmwareProvisioningService(FirmwareTargetProfile.Asm);
+
+        Assert.Equal("Release", service.BuildPreset);
+        Assert.EndsWith(Path.Combine("build", "Release", "VCB240002_2_0.elf"), service.ElfPath);
     }
 
     [Fact]
