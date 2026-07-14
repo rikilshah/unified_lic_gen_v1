@@ -24,6 +24,8 @@ The status bar reports failures while the floating flash window shows the curren
 
 The operator-facing UI shows one wizard step at a time. During final programming, the floating review window visually reports confirmation, ST-LINK probing, programming/reconnect, and verification instead of exposing a persistent main-page log.
 
+The four phases and hardware control/test workspaces share one sidebar shell and one global Modbus session. Flash reconnect uses the same COM port, baud, and slave ID selected for control and testing.
+
 Customer ID generation and recovery are specified in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md).
 
 ## Files and Tools

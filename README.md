@@ -2,7 +2,7 @@
 
 Minimal Windows workflow for reading blank ASM or Stepper cards, assigning identity, generating the complete P-256 package, staging firmware, and performing one guarded final flash with readback verification.
 
-Provisioning is presented as a four-step wizard. Card controls and organized ASM/Stepper test workspaces open in a separate **Control & Testing** window.
+Provisioning phases, ASM controls, Stepper controls, and Test Center are organized in one compact sidebar. Every panel shares the same global Modbus connection and detected identity.
 
 ## Documentation
 

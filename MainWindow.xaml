@@ -32,7 +32,6 @@
                     </Border>
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Spacing="8">
-                    <Button Click="OpenControlTesting_Click" Content="Control &amp; Testing" />
                     <Button Click="SettingsButton_Click" ToolTipService.ToolTip="Connection and application settings">
                         <StackPanel Orientation="Horizontal" Spacing="7"><FontIcon Glyph="&#xE713;" /><TextBlock Text="Settings" /></StackPanel>
                     </Button>
@@ -41,12 +40,22 @@
             </Grid>
         </Border>
 
-        <NavigationView x:Name="Navigation" Grid.Row="1" PaneDisplayMode="LeftMinimal" IsPaneToggleButtonVisible="False"
-                        IsBackButtonVisible="Collapsed" IsSettingsVisible="False" Background="{StaticResource CanvasBrush}"
+        <NavigationView x:Name="Navigation" Grid.Row="1" PaneDisplayMode="Left" IsPaneToggleButtonVisible="False"
+                        OpenPaneLength="218" IsBackButtonVisible="Collapsed" IsSettingsVisible="False" Background="{StaticResource CanvasBrush}"
                         SelectionChanged="Navigation_SelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="1  Read card" Tag="wizard1"><NavigationViewItem.Icon><FontIcon Glyph="&#xE8A7;" /></NavigationViewItem.Icon></NavigationViewItem>
+                <NavigationViewItem Content="2  Create identity" Tag="wizard2"><NavigationViewItem.Icon><FontIcon Glyph="&#xE77B;" /></NavigationViewItem.Icon></NavigationViewItem>
+                <NavigationViewItem Content="3  Generate &amp; stage" Tag="wizard3"><NavigationViewItem.Icon><FontIcon Glyph="&#xE72E;" /></NavigationViewItem.Icon></NavigationViewItem>
+                <NavigationViewItem Content="4  Review &amp; flash" Tag="wizard4"><NavigationViewItem.Icon><FontIcon Glyph="&#xE896;" /></NavigationViewItem.Icon></NavigationViewItem>
+                <NavigationViewItemSeparator />
+                <NavigationViewItem Content="ASM controls" Tag="asm"><NavigationViewItem.Icon><FontIcon Glyph="&#xE950;" /></NavigationViewItem.Icon></NavigationViewItem>
+                <NavigationViewItem Content="Stepper controls" Tag="stepper"><NavigationViewItem.Icon><FontIcon Glyph="&#xEC4A;" /></NavigationViewItem.Icon></NavigationViewItem>
+                <NavigationViewItem Content="Test center" Tag="tests"><NavigationViewItem.Icon><FontIcon Glyph="&#xE9D9;" /></NavigationViewItem.Icon></NavigationViewItem>
+            </NavigationView.MenuItems>
             <Grid>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <Grid x:Name="PageHost" Padding="24" />
+                    <Grid x:Name="PageHost" Padding="16" />
                 </ScrollViewer>
             </Grid>
         </NavigationView>

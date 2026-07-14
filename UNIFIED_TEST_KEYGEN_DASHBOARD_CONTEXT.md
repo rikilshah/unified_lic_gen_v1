@@ -339,7 +339,7 @@ Display a human-readable deny reason while retaining detailed error data in logs
 
 For both supported cards, provide one minimal four-phase workflow: (1) read the card and optionally restore default firmware, (2) persist the assigned serial and generated Customer ID and save CDI JSON, (3) generate the complete key package, stage all final headers, and clean-build, and (4) review a floating summary, flash once, reconnect, and validate against the persisted identity and manifest. Detailed command output must not dominate the primary workspace.
 
-The implemented presentation is a one-step-at-a-time wizard with visual flash progress. Control and testing are isolated in a separate window with independent ASM and Stepper tabs; related live state, outputs or motion, configuration, and test actions are grouped together.
+The implemented presentation is a one-step-at-a-time wizard with visual flash progress. A compact sidebar exposes the four phases plus separate ASM, Stepper, and Test Center workspaces. All panels consume one application-owned Modbus session and its shared COM settings, connection lifecycle, and detected identity; device-specific register maps and commands remain isolated.
 
 Flash requires all prior stages, physical-target acknowledgement, and exact entry of the card serial. Never change RDP option bytes automatically; an unlock can mass-erase the target. See [FIRMWARE_PROVISIONING_AND_FLASH.md](FIRMWARE_PROVISIONING_AND_FLASH.md) for the implemented flow.
 

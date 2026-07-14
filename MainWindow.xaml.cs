@@ -47,14 +47,14 @@ public sealed partial class MainWindow : Window
     private bool _flashDefaultRequested;
     private string? _generatedPackageFolder;
     private int _wizardStep = 1;
-    private ControlTestingWindow? _controlTestingWindow;
 
     public MainWindow()
     {
         InitializeComponent();
         Title = "Unified Test & Keygen Dashboard";
-        AppWindow.Resize(new SizeInt32(1440, 920));
+        AppWindow.Resize(new SizeInt32(1280, 800));
         BuildPages();
+        Navigation.SelectedItem = Navigation.MenuItems[0];
         ShowPage("firmware");
         PositionSettingsDrawer();
         SizeChanged += (_, _) => PositionSettingsDrawer();
@@ -64,6 +64,9 @@ public sealed partial class MainWindow : Window
     private void BuildPages()
     {
         _pages["firmware"] = BuildMinimalFirmwarePage();
+        _pages["asm"] = BuildAsmPage();
+        _pages["stepper"] = BuildStepperPage();
+        _pages["tests"] = BuildTestsPage();
     }
 
     private UIElement BuildOverviewPage()
@@ -291,11 +294,19 @@ public sealed partial class MainWindow : Window
         hardware.Items.Add(new ComboBoxItem { Content = "Stepper Motion Card", Tag = "stepper" });
         hardware.Items.Add(new ComboBoxItem { Content = "ASM I/O Card", Tag = "asm" });
         hardware.SelectionChanged += FirmwareTarget_SelectionChanged;
-        target.Children.Add(RowWith(hardware, ActionButton("Connection settings", SettingsButton_Click, true)));
+        target.Children.Add(hardware);
+        target.Children.Add(ActionButton("Connection settings", SettingsButton_Click, true));
         target.Children.Add(new TextBlock { Name = "FirmwareRepository", Text = _firmwareTarget.RepositoryUrl, Visibility = Visibility.Collapsed });
         target.Children.Add(new TextBlock { Name = "FirmwareSource", Text = _firmwareTarget.LocalRoot, Visibility = Visibility.Collapsed });
         target.Children.Add(new TextBlock { Name = "FirmwareBuildOutput", Text = _firmwareProvisioning.ElfPath, Visibility = Visibility.Collapsed });
-        root.Children.Add(target);
+        var workspace = new Grid { ColumnSpacing = 16 };
+        workspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(290) });
+        workspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        workspace.Children.Add(target);
+        var phaseHost = new StackPanel { Spacing = 10 };
+        Grid.SetColumn(phaseHost, 1);
+        workspace.Children.Add(phaseHost);
+        root.Children.Add(workspace);
 
         var phase1 = Card("1. Read card");
         phase1.Name = "WizardPhase1";
@@ -304,7 +315,7 @@ public sealed partial class MainWindow : Window
             ActionButton("Use detected blank card", (_, _) => AcceptDefaultBaseline(), true),
             ActionButton("Prepare default firmware", async (_, _) => await PrepareAndBuildDefaultAsync()),
             ActionButton("Flash default firmware", (_, _) => ShowDefaultFlashSummary())));
-        root.Children.Add(phase1);
+        phaseHost.Children.Add(phase1);
 
         var phase2 = Card("2. Create identity");
         phase2.Name = "WizardPhase2";
@@ -313,22 +324,22 @@ public sealed partial class MainWindow : Window
         phase2.Children.Add(new TextBlock { Name = "CustomerIdProvisioningValue", Text = "LOCKED", FontFamily = new FontFamily("Cascadia Mono"), FontSize = 18 });
         phase2.Children.Add(new TextBlock { Name = "Phase2Status", Text = "LOCKED", Foreground = Brush("TextSecondaryBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
         phase2.Children.Add(ActionButton("Generate Customer ID and CDI", async (_, _) => await PrepareBlankCustomerIdAsync(), true));
-        root.Children.Add(phase2);
+        phaseHost.Children.Add(phase2);
 
         var phase3 = Card("3. Generate files and stage firmware");
         phase3.Name = "WizardPhase3";
         phase3.Visibility = Visibility.Collapsed;
         phase3.Children.Add(new TextBlock { Name = "Phase3Status", Text = "LOCKED", Foreground = Brush("TextSecondaryBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
         phase3.Children.Add(ActionButton("Generate package and stage", async (_, _) => await GeneratePackageAndStageFirmwareAsync(), true));
-        root.Children.Add(phase3);
+        phaseHost.Children.Add(phase3);
 
         var phase4 = Card("4. Review and flash");
         phase4.Name = "WizardPhase4";
         phase4.Visibility = Visibility.Collapsed;
         phase4.Children.Add(new TextBlock { Name = "Phase4Status", Text = "LOCKED", Foreground = Brush("TextSecondaryBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
         phase4.Children.Add(ActionButton("Review final flash", (_, _) => ShowFlashSummary(), true));
-        root.Children.Add(phase4);
-        root.Children.Add(RowWith(
+        phaseHost.Children.Add(phase4);
+        phaseHost.Children.Add(RowWith(
             ActionButton("Back", WizardBack_Click),
             ActionButton("Continue", WizardNext_Click, true)));
         return root;
@@ -390,7 +401,7 @@ public sealed partial class MainWindow : Window
 
     private StackPanel Page(string title, string subtitle)
     {
-        var panel = new StackPanel { Spacing = 16, MaxWidth = 1260, HorizontalAlignment = HorizontalAlignment.Stretch };
+        var panel = new StackPanel { Spacing = 12, HorizontalAlignment = HorizontalAlignment.Stretch };
         panel.Children.Add(new TextBlock { Text = title, Style = (Style)Application.Current.Resources["PageTitleStyle"] });
         panel.Children.Add(new TextBlock { Text = subtitle, Foreground = Brush("TextSecondaryBrush"), Margin = new Thickness(0, -12, 0, 4) });
         return panel;
@@ -398,7 +409,7 @@ public sealed partial class MainWindow : Window
 
     private StackPanel Card(string title)
     {
-        var content = new StackPanel { Spacing = 12, Background = Brush("SurfaceBrush"), Padding = new Thickness(16) };
+        var content = new StackPanel { Spacing = 10, Background = Brush("SurfaceBrush"), Padding = new Thickness(12) };
         content.Children.Add(new TextBlock { Text = title, Style = (Style)Application.Current.Resources["SectionTitleStyle"] });
         return content;
     }
@@ -660,7 +671,14 @@ public sealed partial class MainWindow : Window
 
     private void Navigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
-        if (args.SelectedItemContainer?.Tag is string tag) ShowPage(tag);
+        if (args.SelectedItemContainer?.Tag is not string tag) return;
+        if (tag.StartsWith("wizard", StringComparison.Ordinal) && int.TryParse(tag[6..], out var step))
+        {
+            ShowPage("firmware");
+            ShowWizardStep(step);
+            return;
+        }
+        ShowPage(tag);
     }
 
     private void ShowPage(string tag)
@@ -678,16 +696,6 @@ public sealed partial class MainWindow : Window
     private void SettingsButton_Click(object sender, RoutedEventArgs e) { PositionSettingsDrawer(); SettingsPopup.IsOpen = true; }
     private void CloseSettings_Click(object sender, RoutedEventArgs e) => SettingsPopup.IsOpen = false;
     private void PositionSettingsDrawer() { SettingsPopup.HorizontalOffset = Math.Max(0, Bounds.Width - 444); SettingsPopup.VerticalOffset = 76; }
-
-    private void OpenControlTesting_Click(object sender, RoutedEventArgs e)
-    {
-        if (_controlTestingWindow is null)
-        {
-            _controlTestingWindow = new ControlTestingWindow();
-            _controlTestingWindow.Closed += (_, _) => _controlTestingWindow = null;
-        }
-        _controlTestingWindow.Activate();
-    }
 
     private void WizardBack_Click(object sender, RoutedEventArgs e) => ShowWizardStep(Math.Max(1, _wizardStep - 1));
 
@@ -722,6 +730,11 @@ public sealed partial class MainWindow : Window
             var labels = new[] { "READ CARD", "CREATE IDENTITY", "GENERATE + STAGE", "REVIEW + FLASH" };
             title.Text = $"STEP {_wizardStep} OF 4  /  {labels[_wizardStep - 1]}";
         }
+        var navigationItem = Navigation.MenuItems
+            .OfType<NavigationViewItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), $"wizard{_wizardStep}", StringComparison.Ordinal));
+        if (navigationItem is not null && !ReferenceEquals(Navigation.SelectedItem, navigationItem))
+            Navigation.SelectedItem = navigationItem;
     }
 
     private async void ConnectButton_Click(object sender, RoutedEventArgs e)

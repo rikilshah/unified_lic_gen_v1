@@ -75,15 +75,16 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 - Firmware target selection is locked to the connected hardware profile, with distinct ASM and Stepper build artifacts.
 - Firmware provisioning is displayed as four vertically ordered phase cards: Default Baseline, Serial & Customer ID, Public Keys, and Final Verification.
 - Each phase exposes only its relevant actions, displays a persistent status, and gates the next phase on verified device readback.
-- The default-public-key identity flash and generated-public-key flash are separate actions so operators can see exactly when cryptographic identity is introduced.
+- Identity and generated public-key headers are staged together and programmed in one final flash.
 - The dashboard opens on the four-phase provisioning workspace rather than the generic overview, and the navigation labels it explicitly so the primary production task is immediately visible.
 - Legacy dashboard destinations are removed from navigation; production operators see one minimal provisioning workspace and connection settings.
 - Instructions are reduced to short action labels and persistent phase status. Detailed flash information appears only in a centered floating summary at the final decision point.
 - Serial, Customer ID, CDI, keys, manifest, and firmware headers are assembled before one final flash; intermediate identity and key flashes are not part of the workflow.
 - Provisioning uses a one-step-at-a-time wizard: Read Card, Create Identity, Generate + Stage, and Review + Flash. Later steps remain hidden until the prior gate passes; completed steps remain reachable with Back.
 - The flash summary includes visual progress for confirmation, ST-LINK probe, programming/reconnect, and identity verification.
-- Control and testing opens in a separate window so live hardware work cannot clutter or accidentally advance provisioning.
-- The Control & Testing window separates ASM and Stepper with hardware tabs. Each workspace groups live state, related controls, configuration, and its card-specific test suite.
+- A persistent compact sidebar contains the four provisioning phases, ASM controls, Stepper controls, and Test Center.
+- Modbus is global application state: every sidebar panel uses the same selected COM port, baud, slave ID, serialized session, connection status, and detected card identity.
+- The provisioning canvas uses an aligned 290 px target column and flexible action column; control pages use consistent equal-width grids and compact 12/16 px spacing.
 
 ## Decisions Log
 
@@ -103,4 +104,5 @@ Color is semantic. Cyan means an operator action or selected context; green mean
 | 2026-07-14 | Provisioning is the startup workspace | Opening directly on the numbered four-phase flow removes an extra navigation step and prevents the redesigned workflow from being mistaken for the unchanged overview. |
 | 2026-07-14 | Generate and stage before one final flash | Saving the complete package and building all final headers before programming reduces repeated card restarts and makes the final destructive action reviewable as one transaction. |
 | 2026-07-14 | Floating flash summary | Flash details and confirmation move out of the primary workspace so the normal phase UI remains minimal. |
-| 2026-07-14 | Wizard provisioning and separate testing window | One visible provisioning step reduces scanning load; operational controls and tests move to hardware-specific workspaces in a separate window. |
+| 2026-07-14 | Wizard and control workspaces share one sidebar shell | One visible provisioning step reduces scanning load while ASM, Stepper, and testing remain immediately reachable without creating a second Modbus owner. |
+| 2026-07-14 | One global Modbus session | Provisioning and all control/test panels share transport settings, connection lifecycle, serialization, and identity to prevent COM-port contention and inconsistent state. |
