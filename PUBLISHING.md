@@ -19,7 +19,7 @@ Run `UnifiedLicGen.exe` from that folder. Distribute the entire folder; WinUI ru
 To create a release ZIP:
 
 ```powershell
-Compress-Archive -Path .\artifacts\publish\win-x64\* -DestinationPath .\artifacts\UnifiedLicGen-v1.0.2-win-x64.zip -Force
+Compress-Archive -Path .\artifacts\publish\win-x64\* -DestinationPath .\artifacts\UnifiedLicGen-v2.0.0-win-x64.zip -Force
 ```
 
 ## What self-contained means

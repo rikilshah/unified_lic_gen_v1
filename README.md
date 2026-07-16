@@ -8,7 +8,7 @@ Provisioning phases, ASM controls, Stepper controls, and Test Center are organiz
 
 The exact 10-digit Customer ID and manifest-verification state remain visible globally. Use the dedicated **Verify board** tab before operating either control panel.
 
-Current public version: **1.0.2**. It is shown in the window title, application header, status bar, and executable metadata.
+Current public version: **2.0.0**. This major release unifies provisioning, authorization, ASM control and Stepper control around one shared Modbus session. The version is shown in the window title, application header, status bar, and executable metadata.
 
 ## Standalone publishing
 
@@ -24,6 +24,7 @@ Distribute the complete `artifacts\publish\win-x64` folder. See [PUBLISHING.md](
 - [Project context and unified architecture](UNIFIED_TEST_KEYGEN_DASHBOARD_CONTEXT.md)
 - [Unified firmware provisioning and flash runbook](FIRMWARE_PROVISIONING_AND_FLASH.md)
 - [Customer ID provisioning SOP](CUSTOMER_ID_PROVISIONING_SOP.md)
+- [Release history](CHANGELOG.md)
 
 ## Source Repositories
 
