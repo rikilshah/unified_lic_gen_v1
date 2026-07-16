@@ -1,4 +1,4 @@
-# Design System - Unified Test & Keygen Dashboard
+# Design System — Unified Test & Keygen Dashboard
 
 ## Product Context
 

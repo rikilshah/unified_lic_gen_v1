@@ -16,14 +16,15 @@ Current public version: **2.0.0**. This major release unifies provisioning, auth
 dotnet publish UnifiedLicGen.csproj -p:PublishProfile=win-x64
 ```
 
-Distribute the complete `artifacts\publish\win-x64` folder. See [PUBLISHING.md](PUBLISHING.md) for ZIP creation, prerequisites, versioning, and release verification.
+Distribute the complete `artifacts\publish\win-x64` folder. See the [publishing guide](docs/guides/PUBLISHING.md) for ZIP creation, prerequisites, versioning, and release verification.
 
 ## Documentation
 
-- [Design system and UX rules](DESIGN.md)
-- [Project context and unified architecture](UNIFIED_TEST_KEYGEN_DASHBOARD_CONTEXT.md)
-- [Unified firmware provisioning and flash runbook](FIRMWARE_PROVISIONING_AND_FLASH.md)
-- [Customer ID provisioning SOP](CUSTOMER_ID_PROVISIONING_SOP.md)
+Start with the [documentation index](docs/README.md). It organizes the project material by purpose:
+
+- [Architecture and project context](docs/architecture/ARCHITECTURE.md)
+- [Design system and UX rules](docs/design/DESIGN.md)
+- [Operator and release guides](docs/guides/)
 - [Release history](CHANGELOG.md)
 
 ## Source Repositories

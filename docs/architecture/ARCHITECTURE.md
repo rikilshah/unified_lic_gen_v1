@@ -345,7 +345,7 @@ The implemented presentation is a one-step-at-a-time wizard with visual flash pr
 
 The sidebar also exposes a dedicated Verify Board workspace above the control/test entries. A successful manifest comparison is retained as global session authorization, shown in the top bar, revalidated against live identity after reconnect, and required by both control modules. The top bar displays the exact 10-digit Customer ID at all times.
 
-Flash requires all prior stages, physical-target acknowledgement, and exact entry of the card serial. Never change RDP option bytes automatically; an unlock can mass-erase the target. See [FIRMWARE_PROVISIONING_AND_FLASH.md](FIRMWARE_PROVISIONING_AND_FLASH.md) for the implemented flow.
+Flash requires all prior stages, physical-target acknowledgement, and exact entry of the card serial. Never change RDP option bytes automatically; an unlock can mass-erase the target. See the [firmware provisioning and flash guide](../guides/FIRMWARE_PROVISIONING_AND_FLASH.md) for the implemented flow.
 
 #### Test Center
 
@@ -534,4 +534,4 @@ For the lowest-risk useful release, include the unified shell, serial connection
 
 ## 14. Blank-Card Customer ID Provisioning
 
-The implemented SOP is recorded in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md). It supports both firmware repositories, establishes a verified default baseline, requires the operator-assigned `S`/`A` serial before Customer ID generation, persists the pair before flashing, introduces generated public keys in a separate phase, and fails closed on serial, Customer ID, or manifest readback mismatch.
+The implemented SOP is recorded in the [Customer ID provisioning guide](../guides/CUSTOMER_ID_PROVISIONING_SOP.md). It supports both firmware repositories, establishes a verified default baseline, requires the operator-assigned `S`/`A` serial before Customer ID generation, persists the pair before flashing, introduces generated public keys in a separate phase, and fails closed on serial, Customer ID, or manifest readback mismatch.
