@@ -21,6 +21,10 @@ This directory is the structured entry point for project documentation. Use the 
 - [Project overview](../README.md) — product entry point, setup commands, and authoritative repositories.
 - [Changelog](../CHANGELOG.md) — shipped capabilities and fixes by public version.
 
+## Related Application
+
+- [Technician application](https://github.com/rikilshah/asm_dashboard) — restricted operational application derived from the Admin dashboard. The [architecture document](architecture/ARCHITECTURE.md#11-admin-and-technician-product-relationship) defines ownership and synchronization rules.
+
 ## Documentation Rules
 
 - Keep `README.md` and `CHANGELOG.md` at the repository root.
@@ -29,3 +33,4 @@ This directory is the structured entry point for project documentation. Use the 
 - Put executable procedures in `docs/guides/`.
 - Link every new document from this index.
 - Treat GitHub repositories as authoritative; local paths are working checkouts only.
+- Define shared device and workflow behavior in the Admin repository first, then port approved changes to the Technician repository from an explicit Admin commit or tag.

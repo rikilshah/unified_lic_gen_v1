@@ -5,7 +5,8 @@ Source projects: `D:\vs_dotnet\key_genui_v1`, `D:\vs_dotnet\modbus_dash_asm_v1`,
 
 Authoritative repositories:
 
-- dashboard: [rikilshah/unified_lic_gen_v1](https://github.com/rikilshah/unified_lic_gen_v1);
+- Admin dashboard and shared product-contract source of truth: [rikilshah/unified_lic_gen_v1](https://github.com/rikilshah/unified_lic_gen_v1);
+- Technician application: [rikilshah/asm_dashboard](https://github.com/rikilshah/asm_dashboard);
 - Stepper firmware: [rikilshah/stepper_control_card_v2](https://github.com/rikilshah/stepper_control_card_v2);
 - ASM firmware: [rikilshah/VCB240002](https://github.com/rikilshah/VCB240002).
 
@@ -23,6 +24,22 @@ Build one well-designed WinUI 3 desktop application for the complete card lifecy
 8. save an auditable test result.
 
 The application should unify the operator experience and shared infrastructure. It must not combine the two incompatible device register maps into one service.
+
+### 1.1 Admin and Technician Product Relationship
+
+The Admin application is the upstream product and the source of truth for all behavior shared with the Technician application. Its repository owns the canonical device identity model, manifest verification, authorization rules, serial/Modbus session behavior, ASM and Stepper register maps, control semantics, test logic, and operator safety gates.
+
+The Technician application is maintained separately in `rikilshah/asm_dashboard`, with `D:\vs_dotnet\asm_dashboard` reserved as its local working checkout. It is a restricted operational derivative: it retains connection, card identification, manifest-based board verification, diagnostics, control dashboards, and functional testing, but excludes license/CDI generation, key generation, identity provisioning, firmware source staging, and firmware build/flash responsibilities.
+
+Synchronization follows these rules:
+
+1. implement and verify changes to shared contracts and behavior in the Admin repository first;
+2. identify the exact Admin commit or release tag used as the Technician update baseline;
+3. port the relevant shared changes into the Technician repository without importing Admin-only provisioning capabilities;
+4. run the shared protocol, register-map, authorization, and control tests in both applications;
+5. record the Admin baseline in the Technician release notes so divergence is visible and auditable.
+
+Technician-specific navigation, role restrictions, packaging, and field UX remain owned by `asm_dashboard`. A Technician implementation must not silently redefine a shared protocol or register contract; such a change must be made in, or reconciled back to, the Admin source of truth first.
 
 ## 2. Executive Summary of the Existing Projects
 

@@ -30,8 +30,11 @@ Start with the [documentation index](docs/README.md). It organizes the project m
 ## Source Repositories
 
 - Dashboard source of truth: [rikilshah/unified_lic_gen_v1](https://github.com/rikilshah/unified_lic_gen_v1)
+- Technician application: [rikilshah/asm_dashboard](https://github.com/rikilshah/asm_dashboard)
 - Stepper firmware source of truth: [rikilshah/stepper_control_card_v2](https://github.com/rikilshah/stepper_control_card_v2)
 - ASM firmware source of truth: [rikilshah/VCB240002](https://github.com/rikilshah/VCB240002)
+
+The Admin dashboard remains the upstream source of truth for shared device contracts, identity and authorization behavior, Modbus infrastructure, register maps, and control/test behavior. Technician releases are derived deliberately from a tagged or committed Admin baseline; Technician-only presentation and deployment changes remain in `asm_dashboard`.
 
 ## Local Verification
 
