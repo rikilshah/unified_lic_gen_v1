@@ -6,6 +6,26 @@ namespace UnifiedLicGen.Tests;
 public sealed class StepperIdentityTests
 {
     [Fact]
+    public void DriveConfiguration_MapsHoldingRegistersSixThroughEighteen()
+    {
+        var registers = Enumerable.Range(0, 19).Select(value => (ushort)value).ToArray();
+        registers[14] = 0xFFFF;
+
+        var config = StepperDriveConfiguration.FromHoldingRegisters(registers);
+
+        Assert.Equal((ushort)6, config.Microstep);
+        Assert.Equal((ushort)11, config.JogChunk);
+        Assert.Equal((ushort)0x000F, config.ConfigBits);
+        Assert.Equal((ushort)15, config.HomeChunk);
+        Assert.Equal((ushort)18, config.DeadbandSpeed);
+    }
+
+    [Fact]
+    public void DriveConfiguration_RejectsIncompleteRegisterBlock()
+    {
+        Assert.Throws<ArgumentException>(() => StepperDriveConfiguration.FromHoldingRegisters(new ushort[18]));
+    }
+    [Fact]
     public void Decode_UsesFirmwareWordOrderAndReservedCustomerRegister()
     {
         var identity = new ushort[46];

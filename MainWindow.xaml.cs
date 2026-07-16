@@ -76,8 +76,8 @@ public sealed partial class MainWindow : Window
     private void BuildPages()
     {
         _pages["firmware"] = BuildMinimalFirmwarePage();
-        _pages["asm"] = BuildAsmPage();
-        _pages["stepper"] = BuildStepperPage();
+        _pages["asm"] = BuildAsmControlPage();
+        _pages["stepper"] = BuildStepperControlPageV2();
         _pages["verify"] = BuildAuthorizationPage();
         _pages["tests"] = BuildTestsPage();
     }
@@ -358,6 +358,48 @@ public sealed partial class MainWindow : Window
         return root;
     }
 
+    private UIElement BuildAsmControlPage()
+    {
+        var root = Page("ASM controls", "Compact live control for PWM, digital I/O and WS2812 outputs.");
+        root.Children.Add(AuthGate());
+        var live = Columns(4);
+        live.Children.Add(ValueCard("PWM1", "0", "Applied / 1023", "AsmPwm1Applied"));
+        live.Children.Add(ValueCard("PWM2", "0", "Applied / 1023", "AsmPwm2Applied"));
+        live.Children.Add(ValueCard("FREQUENCY", "0 Hz", "Applied", "AsmFrequencyApplied"));
+        live.Children.Add(ValueCard("STATUS", "Idle", "Live register", "AsmModbusStatus")); root.Children.Add(live);
+
+        var work = Columns(3);
+        var pwm = Card("PWM outputs  ·  HR 2, 3, 10");
+        var pwm1 = Number("PWM1 duty", 0, 0, 1023); pwm1.Name = "AsmPwm1"; pwm.Children.Add(pwm1);
+        var pwm2 = Number("PWM2 duty", 0, 0, 1023); pwm2.Name = "AsmPwm2"; pwm.Children.Add(pwm2);
+        var frequency = Number("Frequency (Hz)", 1000, 1, 11718); frequency.Name = "AsmFrequency"; pwm.Children.Add(frequency);
+        pwm.Children.Add(ActionButton("Apply and verify", async (_, _) => await ApplyAsmPwmAsync(), true)); work.Children.Add(pwm);
+
+        var io = Card("Digital I/O  ·  HR 4 / IR 0");
+        io.Children.Add(new ToggleSwitch { Name = "AsmBlower", Header = "Blower", OffContent = "Off", OnContent = "On" });
+        io.Children.Add(new ToggleSwitch { Name = "AsmOnboardLed", Header = "Onboard LED", OffContent = "Off", OnContent = "On" });
+        io.Children.Add(CompactStatus("IP1", "Inactive", "AsmIp1")); io.Children.Add(CompactStatus("IP2", "Inactive", "AsmIp2"));
+        io.Children.Add(ActionButton("Apply outputs", async (_, _) => await ApplyAsmOutputsAsync(), true)); work.Children.Add(io);
+
+        var diagnostics = Card("Diagnostics  ·  IR 0–3, 50–51");
+        diagnostics.Children.Add(CompactStatus("WS2812 DMA", "Idle", "AsmWsBusy"));
+        diagnostics.Children.Add(CompactStatus("TIM1 prescaler", "—", "AsmPrescaler"));
+        diagnostics.Children.Add(CompactStatus("Clock division", "—", "AsmClockDivision"));
+        diagnostics.Children.Add(CompactStatus("Pedal events", "None", "AsmPedals"));
+        diagnostics.Children.Add(CompactStatus("Firmware", "—", "AsmFirmware"));
+        diagnostics.Children.Add(ActionButton("Refresh registers", async (_, _) => await RefreshAsmStateAsync(), true)); work.Children.Add(diagnostics);
+        root.Children.Add(work);
+
+        var leds = Card("WS2812 lighting  ·  HR 5–9 + command bits");
+        var ledGrid = Columns(5);
+        foreach (var item in new[] { ("AsmLedAddress", "Address", 0d, 0d, 7d), ("AsmLedRed", "Red", 0d, 0d, 255d), ("AsmLedGreen", "Green", 0d, 0d, 255d), ("AsmLedBlue", "Blue", 0d, 0d, 255d), ("AsmLedBrightness", "Brightness", 128d, 0d, 255d) })
+        { var box = Number(item.Item2, item.Item3, item.Item4, item.Item5); box.Name = item.Item1; ledGrid.Children.Add(box); }
+        leds.Children.Add(ledGrid);
+        leds.Children.Add(RowWith(ActionButton("Update LED", async (_, _) => await UpdateAsmLedAsync(), true), ActionButton("Apply to all 8", async (_, _) => await UpdateAllAsmLedsAsync()), ActionButton("Set brightness", async (_, _) => await SetAsmBrightnessAsync()), ActionButton("Clear all", async (_, _) => await ClearAsmLedsAsync()), ActionButton("Sync", async (_, _) => await RefreshAsmStateAsync())));
+        root.Children.Add(leds);
+        return root;
+    }
+
     private UIElement BuildAsmPage()
     {
         var root = Page("ASM controls", "PWM, blower, digital input and WS2812 controls for the ASM I/O card.");
@@ -379,6 +421,78 @@ public sealed partial class MainWindow : Window
         leds.Children.Add(RowWith(ActionButton("Update selected LED", DeviceAction, true), ActionButton("Clear all LEDs", DeviceAction), ActionButton("Read output registers", DeviceAction)));
         root.Children.Add(leds);
         var profiles = Card("Preset"); profiles.Children.Add(RowWith(ActionButton("Load config JSON", DeviceAction), ActionButton("Save config JSON", DeviceAction), ActionButton("Sync from device", DeviceAction))); root.Children.Add(profiles);
+        return root;
+    }
+
+    private UIElement BuildStepperControlPageV2()
+    {
+        var root = Page("Stepper controls", "Motion and setup grouped by positioning, jog, reference and drive configuration.");
+        root.Children.Add(AuthGate());
+        var live = Columns(4);
+        live.Children.Add(ValueCard("POSITION", "0", "Pulses", "StepperPosition")); live.Children.Add(ValueCard("STATE", "Idle", "Drive", "StepperState"));
+        live.Children.Add(ValueCard("FAULT", "0", "Code", "StepperFault")); live.Children.Add(ValueCard("COMMAND", "0", "Active pulses", "StepperCommand")); root.Children.Add(live);
+
+        var actions = Columns(3);
+        var positioning = Card("Positioning  ·  HR 1–5");
+        var relative = Number("Relative pulses", 1000, int.MinValue, int.MaxValue); relative.Name = "StepperRelative"; positioning.Children.Add(relative);
+        positioning.Children.Add(ActionButton("Move relative", async (_, _) => await MoveStepperRelativeAsync(), true));
+        var absolute = Number("Absolute pulses", 0, 0, uint.MaxValue); absolute.Name = "StepperAbsolute"; positioning.Children.Add(absolute);
+        positioning.Children.Add(ActionButton("Move absolute", async (_, _) => await MoveStepperAbsoluteAsync(), true)); actions.Children.Add(positioning);
+
+        var manual = Card("Manual movement  ·  HR 11");
+        var jog = Number("Jog chunk", 100, 0, ushort.MaxValue); jog.Name = "StepperJogChunk"; manual.Children.Add(jog);
+        manual.Children.Add(RowWith(ActionButton("Jog −", async (_, _) => await JogStepperAsync(false)), ActionButton("Jog +", async (_, _) => await JogStepperAsync(true), true)));
+        manual.Children.Add(CompactStatus("Inputs", "None active", "StepperInputSummary")); actions.Children.Add(manual);
+
+        var reference = Card("Reference  ·  control bits");
+        reference.Children.Add(new TextBlock { Text = "Reset establishes position zero. Homing runs the configured sequence.", Foreground = Brush("TextSecondaryBrush"), TextWrapping = TextWrapping.Wrap });
+        reference.Children.Add(ActionButton("Reset position", async (_, _) => await ResetStepperPositionAsync()));
+        reference.Children.Add(ActionButton("Start homing", async (_, _) => await StartStepperHomingAsync(), true));
+        reference.Children.Add(ActionButton("Refresh live state", async (_, _) => await RefreshStepperDashboardAsync())); actions.Children.Add(reference); root.Children.Add(actions);
+
+        var config = Card("Drive setup  ·  HR 6–18");
+        var cfg = Columns(5);
+        AddNamedNumber(cfg, "StepperMicrostep", "Microstep", 16); AddNamedNumber(cfg, "StepperPpr", "Pulses / rev", 3200);
+        AddNamedNumber(cfg, "StepperAcceleration", "Acceleration", 1000); AddNamedNumber(cfg, "StepperDeceleration", "Deceleration", 1000); AddNamedNumber(cfg, "StepperVelocity", "Velocity", 2000); config.Children.Add(cfg);
+        var advanced = new Expander { Header = "Advanced homing, deadband and driver flags" };
+        var advancedPanel = new StackPanel { Spacing = 8, Padding = new Thickness(0, 8, 0, 0) };
+        var numbers = Columns(5); AddNamedNumber(numbers, "StepperHomeChunk", "Home chunk", 100); AddNamedNumber(numbers, "StepperDeadband", "Deadband", 10);
+        AddNamedNumber(numbers, "StepperHomingSpeed", "Home speed", 500); AddNamedNumber(numbers, "StepperDeadbandSpeed", "Deadband speed", 100); advancedPanel.Children.Add(numbers);
+        advancedPanel.Children.Add(RowWith(
+            new ToggleSwitch { Name = "StepperInvertDirection", Header = "Invert direction" }, new ToggleSwitch { Name = "StepperSwapJog", Header = "Swap jog" },
+            new ToggleSwitch { Name = "StepperEncLimit", Header = "ENC_Z limit" }, new ToggleSwitch { Name = "StepperEncActiveHigh", Header = "ENC_Z active-high" }));
+        advanced.Content = advancedPanel; config.Children.Add(advanced);
+        config.Children.Add(RowWith(ActionButton("Read all registers", async (_, _) => await ReadStepperConfigurationAsync(), true), ActionButton("Write and verify", async (_, _) => await WriteStepperConfigurationAsync()))); root.Children.Add(config);
+        return root;
+    }
+
+    private static void AddNamedNumber(Panel panel, string name, string header, double value)
+    { panel.Children.Add(new NumberBox { Name = name, Header = header, Value = value, Minimum = 0, Maximum = ushort.MaxValue, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, MinWidth = 120 }); }
+
+    private UIElement BuildStepperControlPage()
+    {
+        var root = Page("Stepper controls", "Compact motion control grouped by positioning, manual movement and drive setup.");
+        root.Children.Add(AuthGate());
+        var live = Columns(4);
+        live.Children.Add(ValueCard("POSITION", "0", "Pulses", "StepperPosition")); live.Children.Add(ValueCard("STATE", "Idle", "Drive", "StepperState"));
+        live.Children.Add(ValueCard("FAULT", "0", "Code", "StepperFault")); live.Children.Add(ValueCard("COMMAND", "0", "Active ID", "StepperCommand")); root.Children.Add(live);
+
+        var actionGrid = Columns(3);
+        var positioning = Card("Positioning  ·  target moves");
+        positioning.Children.Add(Number("Relative pulses", 1000, int.MinValue, int.MaxValue)); positioning.Children.Add(ActionButton("Move relative", DeviceAction, true));
+        positioning.Children.Add(Number("Absolute pulses", 0, 0, uint.MaxValue)); positioning.Children.Add(ActionButton("Move absolute", DeviceAction, true)); actionGrid.Children.Add(positioning);
+        var manual = Card("Manual movement  ·  jog"); manual.Children.Add(Number("Jog chunk", 100, 0, ushort.MaxValue));
+        manual.Children.Add(RowWith(ActionButton("Jog −", DeviceAction), ActionButton("Jog +", DeviceAction))); actionGrid.Children.Add(manual);
+        var recovery = Card("Reference  ·  home & reset"); recovery.Children.Add(ActionButton("Reset position", DeviceAction)); recovery.Children.Add(ActionButton("Start homing", DeviceAction, true));
+        recovery.Children.Add(CompactStatus("Inputs", "IP1 · IP2 · ENC_Z", "StepperInputSummary")); actionGrid.Children.Add(recovery); root.Children.Add(actionGrid);
+
+        var config = Card("Drive setup  ·  holding registers");
+        var cfg = Columns(5); cfg.Children.Add(Number("Microstep", 16, 0, ushort.MaxValue)); cfg.Children.Add(Number("Pulses / rev", 3200, 0, ushort.MaxValue)); cfg.Children.Add(Number("Acceleration", 1000, 0, ushort.MaxValue)); cfg.Children.Add(Number("Deceleration", 1000, 0, ushort.MaxValue)); cfg.Children.Add(Number("Velocity", 2000, 0, ushort.MaxValue)); config.Children.Add(cfg);
+        var advanced = new Expander { Header = "Advanced homing, deadband and driver flags" };
+        var advancedPanel = new StackPanel { Spacing = 8, Padding = new Thickness(0, 8, 0, 0) };
+        var numbers = Columns(5); numbers.Children.Add(Number("Home chunk", 100, 0, ushort.MaxValue)); numbers.Children.Add(Number("Deadband", 10, 0, ushort.MaxValue)); numbers.Children.Add(Number("Home speed", 500, 0, ushort.MaxValue)); numbers.Children.Add(Number("Deadband speed", 100, 0, ushort.MaxValue)); numbers.Children.Add(Number("Jog chunk", 100, 0, ushort.MaxValue)); advancedPanel.Children.Add(numbers);
+        advancedPanel.Children.Add(RowWith(new ToggleSwitch { Header = "Invert direction" }, new ToggleSwitch { Header = "Swap jog" }, new ToggleSwitch { Header = "ENC_Z limit" }, new ToggleSwitch { Header = "ENC_Z active-high" })); advanced.Content = advancedPanel; config.Children.Add(advanced);
+        config.Children.Add(RowWith(ActionButton("Read all", async (_, _) => await ReadStepperRegistersAsync(), true), ActionButton("Write setup", DeviceAction), ActionButton("Driver bits", DeviceAction), ActionButton("Load profile", DeviceAction), ActionButton("Save profile", DeviceAction))); root.Children.Add(config);
         return root;
     }
 
@@ -463,6 +577,14 @@ public sealed partial class MainWindow : Window
     private Grid CheckRow(string name, string rule, string stateName) { var g = new Grid { Padding = new Thickness(0, 8, 0, 8) }; g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) }); g.ColumnDefinitions.Add(new ColumnDefinition()); g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) }); g.Children.Add(new TextBlock { Text = name }); var r = new TextBlock { Text = rule, Foreground = Brush("TextSecondaryBrush") }; Grid.SetColumn(r, 1); g.Children.Add(r); var state = new TextBlock { Name = stateName, Text = "NOT CHECKED", Foreground = Brush("WarningBrush"), FontSize = 11, HorizontalAlignment = HorizontalAlignment.Right }; Grid.SetColumn(state, 2); g.Children.Add(state); return g; }
     private Border StepChip(string number, string label, bool active) => new() { Background = active ? new SolidColorBrush(ColorHelper.FromArgb(48, 57, 198, 212)) : Brush("RaisedBrush"), BorderBrush = active ? Brush("AccentBrush") : Brush("BorderBrush"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(16), Padding = new Thickness(12, 6, 12, 6), Child = new TextBlock { Text = $"{number}  {label}", FontSize = 11, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = active ? Brush("AccentBrush") : Brush("TextSecondaryBrush") } };
     private Grid IndicatorRow(string a, string av, string b, string bv) { var g = Columns(2); g.Children.Add(KeyValue(a, av)); g.Children.Add(KeyValue(b, bv)); return g; }
+    private Grid CompactStatus(string label, string value, string name)
+    {
+        var text = new TextBlock { Name = name, Text = value, FontFamily = new FontFamily("Cascadia Mono"), HorizontalAlignment = HorizontalAlignment.Right };
+        var grid = new Grid { Padding = new Thickness(0, 3, 0, 3) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition()); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.Children.Add(new TextBlock { Text = label, Foreground = Brush("TextSecondaryBrush") });
+        Grid.SetColumn(text, 1); grid.Children.Add(text); return grid;
+    }
     private Border TestSuite(string title, IEnumerable<string> tests) { var p = new StackPanel { Spacing = 9 }; p.Children.Add(new TextBlock { Text = title, Style = (Style)Application.Current.Resources["SectionTitleStyle"] }); foreach (var test in tests) p.Children.Add(RowWith(new FontIcon { Glyph = "\uE73E", Foreground = Brush("TextSecondaryBrush") }, new TextBlock { Text = test })); return new Border { Style = (Style)Application.Current.Resources["CardStyle"], Margin = new Thickness(4), Child = p }; }
     private SolidColorBrush Brush(string key) => (SolidColorBrush)Application.Current.Resources[key];
 
@@ -1082,7 +1204,167 @@ public sealed partial class MainWindow : Window
         if ((status.Status & 0x0002) != 0) states.Add("Jogging");
         if ((status.Status & 0x0008) != 0) states.Add("Homing");
         if (FindNameInPages<TextBlock>("StepperState") is { } state) state.Text = states.Count == 0 ? "Idle" : string.Join(" | ", states);
+        var activeInputs = new List<string>();
+        if (status.Ip1) activeInputs.Add("IP1"); if (status.Ip2) activeInputs.Add("IP2"); if (status.EncZ) activeInputs.Add("ENC_Z"); if (status.EncZRaw) activeInputs.Add("ENC_Z raw");
+        SetText("StepperInputSummary", activeInputs.Count == 0 ? "None active" : string.Join(" · ", activeInputs));
     }
+
+    private bool CanControlStepper()
+    {
+        if (!_connected || !_stepperModbus.IsConnected) { SetStatus("Stepper control blocked: connect through global Modbus settings first."); return false; }
+        if (_deviceProfile != "stepper") { SetStatus("Stepper control blocked: the connected card is not identified as Stepper."); return false; }
+        if (!_authorized) { SetStatus("Stepper control blocked: verify the board manifest first."); return false; }
+        return true;
+    }
+
+    private async Task RunStepperCommandAsync(string operation, Func<Task> command)
+    {
+        if (!CanControlStepper()) return;
+        try { await command(); await RefreshStepperLiveStatusAsync(); SetStatus($"Stepper {operation} accepted; live status refreshed."); }
+        catch (Exception ex) { SetStatus($"Stepper {operation} failed: {ex.Message}"); }
+    }
+
+    private static int I32(NumberBox? box, string label)
+    {
+        if (box is null || double.IsNaN(box.Value) || box.Value < int.MinValue || box.Value > int.MaxValue) throw new InvalidOperationException($"Enter a valid {label}.");
+        return checked((int)box.Value);
+    }
+
+    private static uint U32(NumberBox? box, string label)
+    {
+        if (box is null || double.IsNaN(box.Value) || box.Value < uint.MinValue || box.Value > uint.MaxValue) throw new InvalidOperationException($"Enter a valid {label}.");
+        return checked((uint)box.Value);
+    }
+
+    private Task MoveStepperRelativeAsync() => RunStepperCommandAsync("relative move", () => _stepperModbus.MoveStepperRelativeAsync(I32(FindNameInPages<NumberBox>("StepperRelative"), "relative target")));
+    private Task MoveStepperAbsoluteAsync() => RunStepperCommandAsync("absolute move", () => _stepperModbus.MoveStepperAbsoluteAsync(U32(FindNameInPages<NumberBox>("StepperAbsolute"), "absolute target")));
+    private Task JogStepperAsync(bool positive) => RunStepperCommandAsync(positive ? "positive jog" : "negative jog", async () =>
+    {
+        var chunk = U16(FindNameInPages<NumberBox>("StepperJogChunk"), "jog chunk");
+        var config = await _stepperModbus.ReadStepperConfigurationAsync();
+        await _stepperModbus.WriteStepperConfigurationAsync(config with { JogChunk = chunk });
+        await _stepperModbus.JogStepperAsync(positive);
+    });
+    private Task ResetStepperPositionAsync() => RunStepperCommandAsync("position reset", () => _stepperModbus.ResetStepperPositionAsync());
+    private Task StartStepperHomingAsync() => RunStepperCommandAsync("homing", () => _stepperModbus.StartStepperHomingAsync());
+
+    private async Task RefreshStepperDashboardAsync()
+    {
+        if (!CanControlStepper()) return;
+        try { await RefreshStepperLiveStatusAsync(); SetStatus("Stepper live input, position, command, status and fault registers refreshed."); }
+        catch (Exception ex) { SetStatus($"Stepper live refresh failed: {ex.Message}"); }
+    }
+
+    private async Task ReadStepperConfigurationAsync()
+    {
+        if (!CanControlStepper()) return;
+        try
+        {
+            var config = await _stepperModbus.ReadStepperConfigurationAsync(); ApplyStepperConfiguration(config); await RefreshStepperLiveStatusAsync();
+            SetStatus("Stepper holding registers 6–18 and all live status registers synchronized.");
+        }
+        catch (Exception ex) { SetStatus($"Stepper register read failed: {ex.Message}"); }
+    }
+
+    private Task WriteStepperConfigurationAsync() => RunStepperCommandAsync("configuration", async () =>
+    {
+        var config = ReadStepperConfigurationFromUi(); await _stepperModbus.WriteStepperConfigurationAsync(config);
+        var readback = await _stepperModbus.ReadStepperConfigurationAsync();
+        if (readback != config) throw new InvalidDataException("Configuration readback does not match the requested values.");
+        ApplyStepperConfiguration(readback);
+    });
+
+    private StepperDriveConfiguration ReadStepperConfigurationFromUi()
+    {
+        ushort bits = 0;
+        if (FindNameInPages<ToggleSwitch>("StepperInvertDirection")?.IsOn == true) bits |= 0x0001;
+        if (FindNameInPages<ToggleSwitch>("StepperSwapJog")?.IsOn == true) bits |= 0x0002;
+        if (FindNameInPages<ToggleSwitch>("StepperEncLimit")?.IsOn == true) bits |= 0x0004;
+        if (FindNameInPages<ToggleSwitch>("StepperEncActiveHigh")?.IsOn == true) bits |= 0x0008;
+        return new StepperDriveConfiguration(U16(FindNameInPages<NumberBox>("StepperMicrostep"), "microstep"), U16(FindNameInPages<NumberBox>("StepperPpr"), "pulses/rev"),
+            U16(FindNameInPages<NumberBox>("StepperAcceleration"), "acceleration"), U16(FindNameInPages<NumberBox>("StepperDeceleration"), "deceleration"), U16(FindNameInPages<NumberBox>("StepperVelocity"), "velocity"),
+            U16(FindNameInPages<NumberBox>("StepperJogChunk"), "jog chunk"), bits, U16(FindNameInPages<NumberBox>("StepperHomeChunk"), "home chunk"), U16(FindNameInPages<NumberBox>("StepperDeadband"), "deadband"),
+            U16(FindNameInPages<NumberBox>("StepperHomingSpeed"), "homing speed"), U16(FindNameInPages<NumberBox>("StepperDeadbandSpeed"), "deadband speed"));
+    }
+
+    private void ApplyStepperConfiguration(StepperDriveConfiguration config)
+    {
+        SetNumber("StepperMicrostep", config.Microstep); SetNumber("StepperPpr", config.PulsesPerRevolution); SetNumber("StepperAcceleration", config.Acceleration); SetNumber("StepperDeceleration", config.Deceleration);
+        SetNumber("StepperVelocity", config.Velocity); SetNumber("StepperJogChunk", config.JogChunk); SetNumber("StepperHomeChunk", config.HomeChunk); SetNumber("StepperDeadband", config.DeadbandChunk);
+        SetNumber("StepperHomingSpeed", config.HomingSpeed); SetNumber("StepperDeadbandSpeed", config.DeadbandSpeed);
+        if (FindNameInPages<ToggleSwitch>("StepperInvertDirection") is { } a) a.IsOn = (config.ConfigBits & 1) != 0;
+        if (FindNameInPages<ToggleSwitch>("StepperSwapJog") is { } b) b.IsOn = (config.ConfigBits & 2) != 0;
+        if (FindNameInPages<ToggleSwitch>("StepperEncLimit") is { } c) c.IsOn = (config.ConfigBits & 4) != 0;
+        if (FindNameInPages<ToggleSwitch>("StepperEncActiveHigh") is { } d) d.IsOn = (config.ConfigBits & 8) != 0;
+    }
+
+    private bool CanControlAsm()
+    {
+        if (!_connected || !_stepperModbus.IsConnected) { SetStatus("ASM control blocked: connect through the global Modbus settings first."); return false; }
+        if (_deviceProfile != "asm") { SetStatus("ASM control blocked: the connected card is not identified as ASM."); return false; }
+        if (!_authorized) { SetStatus("ASM control blocked: verify the board manifest first."); return false; }
+        return true;
+    }
+
+    private static ushort U16(NumberBox? box, string label)
+    {
+        if (box is null || double.IsNaN(box.Value) || box.Value < 0 || box.Value > ushort.MaxValue)
+            throw new InvalidOperationException($"Enter a valid {label} value.");
+        return checked((ushort)box.Value);
+    }
+
+    private async Task RunAsmCommandAsync(string operation, Func<Task> command)
+    {
+        if (!CanControlAsm()) return;
+        try { await command(); await RefreshAsmStateAsync(false); SetStatus($"ASM {operation} applied and verified by register readback."); }
+        catch (Exception ex) { SetStatus($"ASM {operation} failed: {ex.Message}"); }
+    }
+
+    private Task ApplyAsmPwmAsync() => RunAsmCommandAsync("PWM",
+        () => _stepperModbus.WriteAsmPwmAsync(U16(FindNameInPages<NumberBox>("AsmPwm1"), "PWM1"), U16(FindNameInPages<NumberBox>("AsmPwm2"), "PWM2"), U16(FindNameInPages<NumberBox>("AsmFrequency"), "frequency")));
+
+    private Task ApplyAsmOutputsAsync() => RunAsmCommandAsync("digital outputs",
+        () => _stepperModbus.WriteAsmOutputsAsync(FindNameInPages<ToggleSwitch>("AsmBlower")?.IsOn == true, FindNameInPages<ToggleSwitch>("AsmOnboardLed")?.IsOn == true));
+
+    private Task UpdateAsmLedAsync() => RunAsmCommandAsync("selected LED",
+        () => _stepperModbus.UpdateAsmLedAsync(U16(FindNameInPages<NumberBox>("AsmLedAddress"), "LED address"), U16(FindNameInPages<NumberBox>("AsmLedRed"), "red"), U16(FindNameInPages<NumberBox>("AsmLedGreen"), "green"), U16(FindNameInPages<NumberBox>("AsmLedBlue"), "blue")));
+
+    private Task UpdateAllAsmLedsAsync() => RunAsmCommandAsync("all LEDs",
+        () => _stepperModbus.UpdateAllAsmLedsAsync(U16(FindNameInPages<NumberBox>("AsmLedRed"), "red"), U16(FindNameInPages<NumberBox>("AsmLedGreen"), "green"), U16(FindNameInPages<NumberBox>("AsmLedBlue"), "blue")));
+
+    private Task SetAsmBrightnessAsync() => RunAsmCommandAsync("brightness",
+        () => _stepperModbus.SetAsmBrightnessAsync(U16(FindNameInPages<NumberBox>("AsmLedBrightness"), "brightness")));
+
+    private Task ClearAsmLedsAsync() => RunAsmCommandAsync("LED clear", () => _stepperModbus.ClearAsmLedsAsync());
+
+    private async Task RefreshAsmStateAsync(bool announce = true)
+    {
+        if (!CanControlAsm()) return;
+        try
+        {
+            var state = await _stepperModbus.ReadAsmStateAsync();
+            SetText("AsmPwm1Applied", state.Pwm1Applied.ToString()); SetText("AsmPwm2Applied", state.Pwm2Applied.ToString());
+            SetText("AsmFrequencyApplied", $"{state.FrequencyAppliedHz} Hz");
+            SetText("AsmModbusStatus", state.CommunicationError ? "Error" : "Online");
+            SetText("AsmIp1", state.Ip1Active ? "Active" : "Inactive"); SetText("AsmIp2", state.Ip2Active ? "Active" : "Inactive");
+            SetText("AsmWsBusy", state.Ws2812Busy ? "Busy" : "Idle"); SetText("AsmPrescaler", state.Prescaler.ToString()); SetText("AsmClockDivision", state.ClockDivision.ToString());
+            SetText("AsmPedals", state.Pedal1Latched || state.Pedal2Latched ? $"{(state.Pedal1Latched ? "P1 " : "")}{(state.Pedal2Latched ? "P2" : "")}".Trim() : "None");
+            SetText("AsmFirmware", $"{state.FirmwareMajor}.{state.FirmwareMinor}");
+            if (FindNameInPages<ToggleSwitch>("AsmBlower") is { } blower) blower.IsOn = state.BlowerOn;
+            if (FindNameInPages<ToggleSwitch>("AsmOnboardLed") is { } led) led.IsOn = state.OnboardLedOn;
+            SetNumber("AsmPwm1", state.Outputs.Pwm1Duty); SetNumber("AsmPwm2", state.Outputs.Pwm2Duty); SetNumber("AsmFrequency", state.Outputs.FrequencyHz);
+            SetNumber("AsmLedAddress", state.Outputs.LedAddress); SetNumber("AsmLedRed", state.Outputs.Red); SetNumber("AsmLedGreen", state.Outputs.Green); SetNumber("AsmLedBlue", state.Outputs.Blue); SetNumber("AsmLedBrightness", state.Outputs.Brightness);
+            if (announce) SetStatus("ASM input, applied-value, timer and writable holding registers synchronized.");
+        }
+        catch (Exception ex)
+        {
+            if (!announce) throw;
+            SetStatus($"ASM register refresh failed: {ex.Message}");
+        }
+    }
+
+    private void SetText(string name, string value) { if (FindNameInPages<TextBlock>(name) is { } text) text.Text = value; }
+    private void SetNumber(string name, ushort value) { if (FindNameInPages<NumberBox>(name) is { } box) box.Value = value; }
 
     private async Task ReadStepperRegistersAsync()
     {

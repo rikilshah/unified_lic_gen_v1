@@ -100,7 +100,7 @@
                                 </Grid>
                                 <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <ComboBox x:Name="BaudBox" Header="Baud" SelectedIndex="2"><ComboBoxItem Content="9600" /><ComboBoxItem Content="19200" /><ComboBoxItem Content="38400" /><ComboBoxItem Content="115200" /></ComboBox>
-                                    <NumberBox x:Name="SlaveIdBox" Grid.Column="1" Header="Slave ID" Value="2" Minimum="1" Maximum="247" SpinButtonPlacementMode="Compact" />
+                                    <NumberBox x:Name="SlaveIdBox" Grid.Column="1" Header="Slave ID" Value="1" Minimum="1" Maximum="247" SpinButtonPlacementMode="Compact" />
                                 </Grid>
                                 <Button Click="ConnectButton_Click" Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Content="Connect and identify" />
                             </StackPanel>

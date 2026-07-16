@@ -70,7 +70,7 @@ public sealed record StepperIdentity(
 
 public sealed record StepperLiveStatus(
     uint Position,
-    uint ActiveCommand,
+    int ActiveCommand,
     ushort Status,
     ushort Fault,
     bool Ip1,
@@ -78,3 +78,23 @@ public sealed record StepperLiveStatus(
     bool EncZ,
     bool EncZRaw);
 
+public sealed record StepperDriveConfiguration(
+    ushort Microstep,
+    ushort PulsesPerRevolution,
+    ushort Acceleration,
+    ushort Deceleration,
+    ushort Velocity,
+    ushort JogChunk,
+    ushort ConfigBits,
+    ushort HomeChunk,
+    ushort DeadbandChunk,
+    ushort HomingSpeed,
+    ushort DeadbandSpeed)
+{
+    public static StepperDriveConfiguration FromHoldingRegisters(IReadOnlyList<ushort> registers)
+    {
+        if (registers.Count < 19) throw new ArgumentException("Expected holding registers 0..18.", nameof(registers));
+        return new(registers[6], registers[7], registers[8], registers[9], registers[10], registers[11],
+            (ushort)(registers[14] & 0x000F), registers[15], registers[16], registers[17], registers[18]);
+    }
+}
