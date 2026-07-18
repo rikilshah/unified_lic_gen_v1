@@ -23,6 +23,8 @@ Build one well-designed WinUI 3 desktop application for the complete card lifecy
 7. run the correct functional tests and controls for that card type;
 8. save an auditable test result.
 
+A finalized-card maintenance lane can rebuild and reflash existing identity-bound firmware without entering the license-generation pipeline. It treats the live card plus its previously generated manifest as the authorization source, validates the firmware source headers read-only, and verifies the same identity after programming. No CDI, key, manifest, Customer ID, or identity header is generated in this lane.
+
 The application should unify the operator experience and shared infrastructure. It must not combine the two incompatible device register maps into one service.
 
 ### 1.1 Admin and Technician Product Relationship
@@ -33,7 +35,7 @@ The Technician application is maintained separately in `rikilshah/asm_dashboard`
 
 Synchronization follows these rules:
 
-1. implement and verify changes to shared contracts and behavior in the Admin repository first;
+1. implement and verify shared contracts in the Admin repository first; when a proven Technician improvement originates downstream, reconcile and verify it here before treating it as shared behavior;
 2. identify the exact Admin commit or release tag used as the Technician update baseline;
 3. port the relevant shared changes into the Technician repository without importing Admin-only provisioning capabilities;
 4. run the shared protocol, register-map, authorization, and control tests in both applications;
@@ -251,6 +253,8 @@ Initial modules:
 Auto-detection should use stable product code, hardware revision, firmware signature, or a safe read-only probe. If detection is ambiguous, ask the operator to select the device profile; never probe by writing.
 
 Current firmware sources both publish product code `1`, so the implemented discriminator is the validated live serial namespace: `A` means ASM and `S` means Stepper. An unknown prefix is ambiguous and requires explicit profile selection.
+
+The current shared transport opens one COM port and probes two configurable addresses without writing: ASM defaults to slave `1`, and Stepper defaults to slave `2`. Either or both identities may be present. Authorization is tracked independently per detected card; ASM writes require an ASM-matching manifest, and Stepper writes require a Stepper-matching manifest. Admin provisioning continues to select one active firmware target and uses that target's configured slave address for post-flash readback.
 
 ## 5. Proposed Solution Architecture
 

@@ -4,11 +4,13 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using UnifiedLicGen.Models;
 using UnifiedLicGen.Services;
 using KeyGeneratorUi.Services;
 using Windows.Storage.Pickers;
 using Windows.Graphics;
+using Windows.UI;
 
 namespace UnifiedLicGen;
 
@@ -37,11 +39,31 @@ public sealed partial class MainWindow : Window
     private readonly CustomerIdProvisioningService _customerIdProvisioning = new();
     private StepperIdentity? _stepperIdentity;
     private CustomerIdProvisioningSession? _customerIdSession;
+    private StepperIdentity? _asmIdentity;
+    private bool _asmAuthorized;
+    private bool _stepperAuthorized;
+    private readonly Microsoft.UI.Dispatching.DispatcherQueueTimer _inputPollTimer;
+    private bool _inputPollInProgress;
+    private CancellationTokenSource? _rainbowCts;
+    private readonly Dictionary<string, Storyboard> _indicatorAnimations = new();
+    private Storyboard? _fanAnimation;
+    private bool _syncingAsmControls;
+    private bool _lastBlowerOn;
+    private bool _lastOnboardLedOn;
+    private Color _selectedWs2812Color = Colors.Black;
+    private bool _syncingWs2812Color;
     private CardIdentityCdi? _currentCdi;
     private string? _currentCdiPath;
     private readonly CardManifestService _manifestService = new();
     private CardManifest? _loadedManifest;
     private string? _loadedManifestPath;
+    private readonly Dictionary<string, CardManifest> _trustedManifests = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _trustedManifestPaths = new(StringComparer.OrdinalIgnoreCase);
+    private static string ManifestPreferenceFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UnifiedLicGen");
+    private static string LegacyManifestPreferencePath => Path.Combine(ManifestPreferenceFolder, "manifest.path");
+    private static string ManifestPreferencePath => LegacyManifestPreferencePath;
+    private static string ManifestPreferenceFile(string profileId) => Path.Combine(ManifestPreferenceFolder, $"manifest.{profileId}.path");
+    private static string DefaultManifestPath => Path.Combine(AppContext.BaseDirectory, "manifests", "default_manifest.json");
     private FirmwareTargetProfile _firmwareTarget = FirmwareTargetProfile.Stepper;
     private FirmwareProvisioningService _firmwareProvisioning = new(FirmwareTargetProfile.Stepper);
     private bool _firmwarePrepared;
@@ -55,22 +77,38 @@ public sealed partial class MainWindow : Window
     private bool _publicKeyPrepared;
     private bool _publicKeyVerified;
     private bool _flashDefaultRequested;
+    private bool _maintenanceReflashRequested;
+    private CardIdentityCdi? _maintenanceExpectedCdi;
+    private CardManifest? _maintenanceManifest;
+    private string? _maintenanceManifestPath;
+    private string? _maintenanceElfSha256;
+    private FirmwareTargetProfile? _maintenanceTarget;
+    private FirmwareProvisioningService? _maintenanceProvisioning;
     private string? _generatedPackageFolder;
     private int _wizardStep = 1;
 
     public MainWindow()
     {
         InitializeComponent();
+        _inputPollTimer = DispatcherQueue.CreateTimer();
+        _inputPollTimer.Interval = TimeSpan.FromMilliseconds(300);
+        _inputPollTimer.IsRepeating = true;
+        _inputPollTimer.Tick += InputPollTimer_Tick;
         Title = $"◆ Unified Test & Keygen Dashboard  v{DisplayVersion}";
         HeaderVersionText.Text = $"TEST • AUTH • PROVISION  /  v{DisplayVersion}";
         StatusVersionText.Text = $"UnifiedLicGen  v{DisplayVersion}";
-        AppWindow.Resize(new SizeInt32(1280, 800));
+        AppWindow.Resize(new SizeInt32(1440, 900));
         BuildPages();
         Navigation.SelectedItem = Navigation.MenuItems[0];
         ShowPage("firmware");
         PositionSettingsDrawer();
         SizeChanged += (_, _) => PositionSettingsDrawer();
-        Navigation.Loaded += async (_, _) => await RefreshPortsAsync(showStatus: false);
+        Closed += (_, _) => { StopRainbowSweep(false); _inputPollTimer.Stop(); _stepperModbus.Dispose(); };
+        Navigation.Loaded += async (_, _) =>
+        {
+            await RefreshPortsAsync(showStatus: false);
+            await RestoreManifestAsync();
+        };
     }
 
     private void BuildPages()
@@ -98,7 +136,7 @@ public sealed partial class MainWindow : Window
         status.Children.Add(KeyValue("Test run", "Not started"));
         root.Children.Add(status);
 
-        var notice = new InfoBar { IsOpen = true, Severity = InfoBarSeverity.Informational, Title = "Shared SOP, separate hardware", Message = "Identity, P-256 provisioning and authorization are shared. ASM and Stepper commands remain isolated behind their own validated register maps." };
+        var notice = new InfoBar { IsOpen = true, Severity = InfoBarSeverity.Informational, Title = "Shared SOP, separate hardware", Message = "Identity, provisioning and authorization are shared. ASM and Stepper controls remain safely isolated." };
         root.Children.Add(notice);
         return root;
     }
@@ -175,11 +213,14 @@ public sealed partial class MainWindow : Window
     private UIElement BuildAuthorizationPage()
     {
         var root = Page("Verify board", "Import a trusted manifest and compare it with the connected board.");
-        var load = Card("Provisioning manifest");
+        var load = Card("Trusted manifests");
         var row = Row();
-        row.Children.Add(ActionButton("Import manifest JSON", async (_, _) => await ImportManifestAsync(), true));
-        row.Children.Add(new TextBlock { Name = "ManifestFileText", Text = "No manifest loaded", Foreground = Brush("TextSecondaryBrush"), VerticalAlignment = VerticalAlignment.Center });
-        load.Children.Add(row); root.Children.Add(load);
+        row.Children.Add(ActionButton("Import manifest", async (_, _) => await ImportManifestAsync(), true));
+        row.Children.Add(new TextBlock { Text = "Import once for each connected card. The serial routes it automatically.", Foreground = Brush("TextSecondaryBrush"), VerticalAlignment = VerticalAlignment.Center });
+        load.Children.Add(row);
+        load.Children.Add(CompactStatus("ASM", "Not loaded", "AsmManifestFileText"));
+        load.Children.Add(CompactStatus("Stepper", "Not loaded", "StepperManifestFileText"));
+        root.Children.Add(load);
 
         var checks = Card("Identity comparison");
         checks.Children.Add(CheckRow("Serial number", "Optional when present", "AuthSerial"));
@@ -312,6 +353,15 @@ public sealed partial class MainWindow : Window
         target.Children.Add(new TextBlock { Name = "FirmwareRepository", Text = _firmwareTarget.RepositoryUrl, Visibility = Visibility.Collapsed });
         target.Children.Add(new TextBlock { Name = "FirmwareSource", Text = _firmwareTarget.LocalRoot, Visibility = Visibility.Collapsed });
         target.Children.Add(new TextBlock { Name = "FirmwareBuildOutput", Text = _firmwareProvisioning.ElfPath, Visibility = Visibility.Collapsed });
+        target.Children.Add(new Border { Height = 1, Margin = new Thickness(0, 8, 0, 4), Background = Brush("BorderBrush") });
+        target.Children.Add(new TextBlock { Text = "MAINTENANCE", FontSize = 11, Foreground = Brush("AccentBrush"), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+        target.Children.Add(new TextBlock
+        {
+            Text = "Rebuild and reflash a finalized card. Existing identity and license files remain unchanged.",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = Brush("TextSecondaryBrush")
+        });
+        target.Children.Add(ActionButton("Reflash finalized firmware", async (_, _) => await PrepareMaintenanceReflashAsync()));
         var workspace = new Grid { ColumnSpacing = 16 };
         workspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(290) });
         workspace.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -366,36 +416,75 @@ public sealed partial class MainWindow : Window
         live.Children.Add(ValueCard("PWM1", "0", "Applied / 1023", "AsmPwm1Applied"));
         live.Children.Add(ValueCard("PWM2", "0", "Applied / 1023", "AsmPwm2Applied"));
         live.Children.Add(ValueCard("FREQUENCY", "0 Hz", "Applied", "AsmFrequencyApplied"));
-        live.Children.Add(ValueCard("STATUS", "Idle", "Live register", "AsmModbusStatus")); root.Children.Add(live);
+        live.Children.Add(ValueCard("STATUS", "Idle", "Communication", "AsmModbusStatus")); root.Children.Add(live);
 
         var work = Columns(3);
-        var pwm = Card("PWM outputs  ·  HR 2, 3, 10");
-        var pwm1 = Number("PWM1 duty", 0, 0, 1023); pwm1.Name = "AsmPwm1"; pwm.Children.Add(pwm1);
-        var pwm2 = Number("PWM2 duty", 0, 0, 1023); pwm2.Name = "AsmPwm2"; pwm.Children.Add(pwm2);
-        var frequency = Number("Frequency (Hz)", 1000, 1, 11718); frequency.Name = "AsmFrequency"; pwm.Children.Add(frequency);
+        var pwm = Card("PWM outputs");
+        var pwmFields = Columns(3);
+        var pwm1 = Number("PWM1 duty", 0, 0, 1023); pwm1.Name = "AsmPwm1"; pwm1.MinWidth = 80; pwmFields.Children.Add(pwm1);
+        var pwm2 = Number("PWM2 duty", 0, 0, 1023); pwm2.Name = "AsmPwm2"; pwm2.MinWidth = 80; pwmFields.Children.Add(pwm2);
+        var frequency = Number("Frequency (Hz)", 1000, 1, 11718); frequency.Name = "AsmFrequency"; frequency.MinWidth = 80; pwmFields.Children.Add(frequency);
+        pwm.Children.Add(pwmFields);
         pwm.Children.Add(ActionButton("Apply and verify", async (_, _) => await ApplyAsmPwmAsync(), true)); work.Children.Add(pwm);
 
-        var io = Card("Digital I/O  ·  HR 4 / IR 0");
-        io.Children.Add(new ToggleSwitch { Name = "AsmBlower", Header = "Blower", OffContent = "Off", OnContent = "On" });
-        io.Children.Add(new ToggleSwitch { Name = "AsmOnboardLed", Header = "Onboard LED", OffContent = "Off", OnContent = "On" });
-        io.Children.Add(CompactStatus("IP1", "Inactive", "AsmIp1")); io.Children.Add(CompactStatus("IP2", "Inactive", "AsmIp2"));
-        io.Children.Add(ActionButton("Apply outputs", async (_, _) => await ApplyAsmOutputsAsync(), true)); work.Children.Add(io);
+        var io = Card("Inputs and outputs");
+        var blower = new ToggleSwitch { Name = "AsmBlower", Header = "Blower", OffContent = "Off", OnContent = "On" };
+        blower.Toggled += AsmOutput_Toggled;
+        var fan = BuildFanIndicator();
+        var onboardLed = new ToggleSwitch { Name = "AsmOnboardLed", Header = "Onboard LED", OffContent = "Off", OnContent = "On" };
+        onboardLed.Toggled += AsmOutput_Toggled;
+        var outputs = Columns(2);
+        outputs.Children.Add(RowWith(blower, fan));
+        outputs.Children.Add(onboardLed);
+        io.Children.Add(outputs);
+        var inputs = Columns(2);
+        inputs.Children.Add(InputIndicator("IP1", "AsmIp1", "AsmIp1Dot"));
+        inputs.Children.Add(InputIndicator("IP2", "AsmIp2", "AsmIp2Dot"));
+        io.Children.Add(inputs);
+        work.Children.Add(io);
 
-        var diagnostics = Card("Diagnostics  ·  IR 0–3, 50–51");
-        diagnostics.Children.Add(CompactStatus("WS2812 DMA", "Idle", "AsmWsBusy"));
-        diagnostics.Children.Add(CompactStatus("TIM1 prescaler", "—", "AsmPrescaler"));
-        diagnostics.Children.Add(CompactStatus("Clock division", "—", "AsmClockDivision"));
-        diagnostics.Children.Add(CompactStatus("Pedal events", "None", "AsmPedals"));
-        diagnostics.Children.Add(CompactStatus("Firmware", "—", "AsmFirmware"));
-        diagnostics.Children.Add(ActionButton("Refresh registers", async (_, _) => await RefreshAsmStateAsync(), true)); work.Children.Add(diagnostics);
+        var diagnostics = Card("Diagnostics");
+        var diagnosticValues = Columns(2);
+        diagnosticValues.Children.Add(CompactStatus("WS2812 DMA", "Idle", "AsmWsBusy"));
+        diagnosticValues.Children.Add(CompactStatus("TIM1 prescaler", "—", "AsmPrescaler"));
+        diagnosticValues.Children.Add(CompactStatus("Clock division", "—", "AsmClockDivision"));
+        diagnosticValues.Children.Add(CompactStatus("Pedal events", "None", "AsmPedals"));
+        diagnosticValues.Children.Add(CompactStatus("Firmware", "—", "AsmFirmware"));
+        diagnostics.Children.Add(diagnosticValues);
+        diagnostics.Children.Add(ActionButton("Refresh status", async (_, _) => await RefreshAsmStateAsync(), true)); work.Children.Add(diagnostics);
         root.Children.Add(work);
 
-        var leds = Card("WS2812 lighting  ·  HR 5–9 + command bits");
-        var ledGrid = Columns(5);
-        foreach (var item in new[] { ("AsmLedAddress", "Address", 0d, 0d, 7d), ("AsmLedRed", "Red", 0d, 0d, 255d), ("AsmLedGreen", "Green", 0d, 0d, 255d), ("AsmLedBlue", "Blue", 0d, 0d, 255d), ("AsmLedBrightness", "Brightness", 128d, 0d, 255d) })
-        { var box = Number(item.Item2, item.Item3, item.Item4, item.Item5); box.Name = item.Item1; ledGrid.Children.Add(box); }
-        leds.Children.Add(ledGrid);
-        leds.Children.Add(RowWith(ActionButton("Update LED", async (_, _) => await UpdateAsmLedAsync(), true), ActionButton("Apply to all 8", async (_, _) => await UpdateAllAsmLedsAsync()), ActionButton("Set brightness", async (_, _) => await SetAsmBrightnessAsync()), ActionButton("Clear all", async (_, _) => await ClearAsmLedsAsync()), ActionButton("Sync", async (_, _) => await RefreshAsmStateAsync())));
+        var leds = Card("WS2812 lighting");
+        var lighting = new Grid { ColumnSpacing = 16, HorizontalAlignment = HorizontalAlignment.Stretch };
+        lighting.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(76) });
+        lighting.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(5, GridUnitType.Star) });
+        lighting.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(7, GridUnitType.Star) });
+        lighting.Children.Add(BuildWs2812ColorPreview());
+
+        var rgb = new StackPanel { Spacing = 3, VerticalAlignment = VerticalAlignment.Center };
+        rgb.Children.Add(BuildRgbSlider("AsmLedRed", "R", Brush("ErrorBrush")));
+        rgb.Children.Add(BuildRgbSlider("AsmLedGreen", "G", Brush("SuccessBrush")));
+        rgb.Children.Add(BuildRgbSlider("AsmLedBlue", "B", new SolidColorBrush(ColorHelper.FromArgb(255, 88, 166, 255))));
+        Grid.SetColumn(rgb, 1); lighting.Children.Add(rgb);
+
+        var ledControls = new StackPanel { Spacing = 7 };
+        var deviceFields = Columns(3);
+        var address = Number("LED address", 0, 0, 7); address.Name = "AsmLedAddress"; address.MinWidth = 80; deviceFields.Children.Add(address);
+        var brightness = Number("Brightness", 128, 0, 255); brightness.Name = "AsmLedBrightness"; brightness.MinWidth = 80; deviceFields.Children.Add(brightness);
+        var rainbowSpeed = Number("Rainbow frame (ms)", 180, 80, 2000); rainbowSpeed.Name = "AsmRainbowInterval"; rainbowSpeed.MinWidth = 100; deviceFields.Children.Add(rainbowSpeed);
+        ledControls.Children.Add(deviceFields);
+        var ledActions = Columns(4);
+        ledActions.Children.Add(ActionButton("Update LED", async (_, _) => await UpdateAsmLedAsync(), true));
+        ledActions.Children.Add(ActionButton("Apply all", async (_, _) => await UpdateAllAsmLedsAsync()));
+        ledActions.Children.Add(ActionButton("Set brightness", async (_, _) => await SetAsmBrightnessAsync()));
+        ledActions.Children.Add(ActionButton("Clear", async (_, _) => await ClearAsmLedsAsync()));
+        ledControls.Children.Add(ledActions);
+        var animationActions = Columns(2);
+        animationActions.Children.Add(ActionButton("Start rainbow", (_, _) => StartRainbowSweep(), true));
+        animationActions.Children.Add(ActionButton("Stop rainbow", (_, _) => StopRainbowSweep()));
+        ledControls.Children.Add(animationActions);
+        Grid.SetColumn(ledControls, 2); lighting.Children.Add(ledControls);
+        leds.Children.Add(lighting);
         root.Children.Add(leds);
         return root;
     }
@@ -418,7 +507,7 @@ public sealed partial class MainWindow : Window
 
         var leds = Card("WS2812 lighting");
         var ledGrid = Columns(5); ledGrid.Children.Add(Number("LED address", 0, 0, 7)); ledGrid.Children.Add(Number("Red", 0, 0, 255)); ledGrid.Children.Add(Number("Green", 0, 0, 255)); ledGrid.Children.Add(Number("Blue", 0, 0, 255)); ledGrid.Children.Add(Number("Brightness", 128, 0, 255)); leds.Children.Add(ledGrid);
-        leds.Children.Add(RowWith(ActionButton("Update selected LED", DeviceAction, true), ActionButton("Clear all LEDs", DeviceAction), ActionButton("Read output registers", DeviceAction)));
+        leds.Children.Add(RowWith(ActionButton("Update selected LED", DeviceAction, true), ActionButton("Clear all LEDs", DeviceAction), ActionButton("Refresh outputs", DeviceAction)));
         root.Children.Add(leds);
         var profiles = Card("Preset"); profiles.Children.Add(RowWith(ActionButton("Load config JSON", DeviceAction), ActionButton("Save config JSON", DeviceAction), ActionButton("Sync from device", DeviceAction))); root.Children.Add(profiles);
         return root;
@@ -433,24 +522,25 @@ public sealed partial class MainWindow : Window
         live.Children.Add(ValueCard("FAULT", "0", "Code", "StepperFault")); live.Children.Add(ValueCard("COMMAND", "0", "Active pulses", "StepperCommand")); root.Children.Add(live);
 
         var actions = Columns(3);
-        var positioning = Card("Positioning  ·  HR 1–5");
-        var relative = Number("Relative pulses", 1000, int.MinValue, int.MaxValue); relative.Name = "StepperRelative"; positioning.Children.Add(relative);
-        positioning.Children.Add(ActionButton("Move relative", async (_, _) => await MoveStepperRelativeAsync(), true));
-        var absolute = Number("Absolute pulses", 0, 0, uint.MaxValue); absolute.Name = "StepperAbsolute"; positioning.Children.Add(absolute);
-        positioning.Children.Add(ActionButton("Move absolute", async (_, _) => await MoveStepperAbsoluteAsync(), true)); actions.Children.Add(positioning);
+        var positioning = Card("Positioning");
+        var relativeRow = Columns(2);
+        var relative = Number("Relative pulses", 1000, int.MinValue, int.MaxValue); relative.Name = "StepperRelative"; relativeRow.Children.Add(relative);
+        relativeRow.Children.Add(ActionButton("Move relative", async (_, _) => await MoveStepperRelativeAsync(), true)); positioning.Children.Add(relativeRow);
+        var absoluteRow = Columns(2);
+        var absolute = Number("Absolute pulses", 0, 0, uint.MaxValue); absolute.Name = "StepperAbsolute"; absoluteRow.Children.Add(absolute);
+        absoluteRow.Children.Add(ActionButton("Move absolute", async (_, _) => await MoveStepperAbsoluteAsync(), true)); positioning.Children.Add(absoluteRow); actions.Children.Add(positioning);
 
-        var manual = Card("Manual movement  ·  HR 11");
+        var manual = Card("Manual movement");
         var jog = Number("Jog chunk", 100, 0, ushort.MaxValue); jog.Name = "StepperJogChunk"; manual.Children.Add(jog);
         manual.Children.Add(RowWith(ActionButton("Jog −", async (_, _) => await JogStepperAsync(false)), ActionButton("Jog +", async (_, _) => await JogStepperAsync(true), true)));
         manual.Children.Add(CompactStatus("Inputs", "None active", "StepperInputSummary")); actions.Children.Add(manual);
 
-        var reference = Card("Reference  ·  control bits");
+        var reference = Card("Reference");
         reference.Children.Add(new TextBlock { Text = "Reset establishes position zero. Homing runs the configured sequence.", Foreground = Brush("TextSecondaryBrush"), TextWrapping = TextWrapping.Wrap });
-        reference.Children.Add(ActionButton("Reset position", async (_, _) => await ResetStepperPositionAsync()));
-        reference.Children.Add(ActionButton("Start homing", async (_, _) => await StartStepperHomingAsync(), true));
+        reference.Children.Add(RowWith(ActionButton("Reset position", async (_, _) => await ResetStepperPositionAsync()), ActionButton("Start homing", async (_, _) => await StartStepperHomingAsync(), true)));
         reference.Children.Add(ActionButton("Refresh live state", async (_, _) => await RefreshStepperDashboardAsync())); actions.Children.Add(reference); root.Children.Add(actions);
 
-        var config = Card("Drive setup  ·  HR 6–18");
+        var config = Card("Drive setup");
         var cfg = Columns(5);
         AddNamedNumber(cfg, "StepperMicrostep", "Microstep", 16); AddNamedNumber(cfg, "StepperPpr", "Pulses / rev", 3200);
         AddNamedNumber(cfg, "StepperAcceleration", "Acceleration", 1000); AddNamedNumber(cfg, "StepperDeceleration", "Deceleration", 1000); AddNamedNumber(cfg, "StepperVelocity", "Velocity", 2000); config.Children.Add(cfg);
@@ -458,16 +548,19 @@ public sealed partial class MainWindow : Window
         var advancedPanel = new StackPanel { Spacing = 8, Padding = new Thickness(0, 8, 0, 0) };
         var numbers = Columns(5); AddNamedNumber(numbers, "StepperHomeChunk", "Home chunk", 100); AddNamedNumber(numbers, "StepperDeadband", "Deadband", 10);
         AddNamedNumber(numbers, "StepperHomingSpeed", "Home speed", 500); AddNamedNumber(numbers, "StepperDeadbandSpeed", "Deadband speed", 100); advancedPanel.Children.Add(numbers);
-        advancedPanel.Children.Add(RowWith(
-            new ToggleSwitch { Name = "StepperInvertDirection", Header = "Invert direction" }, new ToggleSwitch { Name = "StepperSwapJog", Header = "Swap jog" },
-            new ToggleSwitch { Name = "StepperEncLimit", Header = "ENC_Z limit" }, new ToggleSwitch { Name = "StepperEncActiveHigh", Header = "ENC_Z active-high" }));
+        var flags = Columns(4);
+        flags.Children.Add(new ToggleSwitch { Name = "StepperInvertDirection", Header = "Invert direction" });
+        flags.Children.Add(new ToggleSwitch { Name = "StepperSwapJog", Header = "Swap jog" });
+        flags.Children.Add(new ToggleSwitch { Name = "StepperEncLimit", Header = "ENC_Z limit" });
+        flags.Children.Add(new ToggleSwitch { Name = "StepperEncActiveHigh", Header = "ENC_Z active-high" });
+        advancedPanel.Children.Add(flags);
         advanced.Content = advancedPanel; config.Children.Add(advanced);
-        config.Children.Add(RowWith(ActionButton("Read all registers", async (_, _) => await ReadStepperConfigurationAsync(), true), ActionButton("Write and verify", async (_, _) => await WriteStepperConfigurationAsync()))); root.Children.Add(config);
+        config.Children.Add(RowWith(ActionButton("Refresh setup", async (_, _) => await ReadStepperConfigurationAsync(), true), ActionButton("Write and verify", async (_, _) => await WriteStepperConfigurationAsync()))); root.Children.Add(config);
         return root;
     }
 
     private static void AddNamedNumber(Panel panel, string name, string header, double value)
-    { panel.Children.Add(new NumberBox { Name = name, Header = header, Value = value, Minimum = 0, Maximum = ushort.MaxValue, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, MinWidth = 120 }); }
+    { panel.Children.Add(new NumberBox { Name = name, Header = header, Value = value, Minimum = 0, Maximum = ushort.MaxValue, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, MinWidth = 112, HorizontalAlignment = HorizontalAlignment.Stretch }); }
 
     private UIElement BuildStepperControlPage()
     {
@@ -486,7 +579,7 @@ public sealed partial class MainWindow : Window
         var recovery = Card("Reference  ·  home & reset"); recovery.Children.Add(ActionButton("Reset position", DeviceAction)); recovery.Children.Add(ActionButton("Start homing", DeviceAction, true));
         recovery.Children.Add(CompactStatus("Inputs", "IP1 · IP2 · ENC_Z", "StepperInputSummary")); actionGrid.Children.Add(recovery); root.Children.Add(actionGrid);
 
-        var config = Card("Drive setup  ·  holding registers");
+        var config = Card("Drive setup");
         var cfg = Columns(5); cfg.Children.Add(Number("Microstep", 16, 0, ushort.MaxValue)); cfg.Children.Add(Number("Pulses / rev", 3200, 0, ushort.MaxValue)); cfg.Children.Add(Number("Acceleration", 1000, 0, ushort.MaxValue)); cfg.Children.Add(Number("Deceleration", 1000, 0, ushort.MaxValue)); cfg.Children.Add(Number("Velocity", 2000, 0, ushort.MaxValue)); config.Children.Add(cfg);
         var advanced = new Expander { Header = "Advanced homing, deadband and driver flags" };
         var advancedPanel = new StackPanel { Spacing = 8, Padding = new Thickness(0, 8, 0, 0) };
@@ -528,15 +621,15 @@ public sealed partial class MainWindow : Window
 
     private StackPanel Page(string title, string subtitle)
     {
-        var panel = new StackPanel { Spacing = 12, HorizontalAlignment = HorizontalAlignment.Stretch };
+        var panel = new StackPanel { Spacing = 4, HorizontalAlignment = HorizontalAlignment.Stretch };
         panel.Children.Add(new TextBlock { Text = title, Style = (Style)Application.Current.Resources["PageTitleStyle"] });
-        panel.Children.Add(new TextBlock { Text = subtitle, Foreground = Brush("TextSecondaryBrush"), Margin = new Thickness(0, -12, 0, 4) });
+        panel.Children.Add(new TextBlock { Text = subtitle, Foreground = Brush("TextSecondaryBrush"), Margin = new Thickness(0, 0, 0, 6), TextWrapping = TextWrapping.Wrap });
         return panel;
     }
 
     private StackPanel Card(string title)
     {
-        var content = new StackPanel { Spacing = 10, Background = Brush("SurfaceBrush"), Padding = new Thickness(12) };
+        var content = new StackPanel { Spacing = 8, Background = Brush("SurfaceBrush"), Padding = new Thickness(12) };
         content.Children.Add(new TextBlock { Text = title, Style = (Style)Application.Current.Resources["SectionTitleStyle"] });
         return content;
     }
@@ -547,33 +640,42 @@ public sealed partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(valueName)) valueText.Name = valueName;
         return new Border
         {
-            Style = (Style)Application.Current.Resources["CardStyle"], Margin = new Thickness(4),
+            Style = (Style)Application.Current.Resources["CardStyle"],
             Child = new StackPanel { Spacing = 5, Children = { new TextBlock { Text = label, FontSize = 11, Foreground = Brush("TextSecondaryBrush") }, valueText, new TextBlock { Text = detail, FontSize = 12, Foreground = Brush("TextSecondaryBrush") } } }
         };
     }
 
     private Border MetricCard(string number, string title, string body, string action, RoutedEventHandler handler) => new()
     {
-        Style = (Style)Application.Current.Resources["CardStyle"], Margin = new Thickness(4),
+        Style = (Style)Application.Current.Resources["CardStyle"],
         Child = new StackPanel { Spacing = 10, Children = { new TextBlock { Text = number, FontSize = 12, Foreground = Brush("AccentBrush") }, new TextBlock { Text = title, FontSize = 17, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold }, new TextBlock { Text = body, TextWrapping = TextWrapping.Wrap, Foreground = Brush("TextSecondaryBrush"), MinHeight = 42 }, ActionButton(action, handler, true) } }
     };
 
     private Grid Columns(int count)
     {
-        var grid = new Grid { ColumnSpacing = 12 };
+        var grid = new Grid { ColumnSpacing = 12, RowSpacing = 12, HorizontalAlignment = HorizontalAlignment.Stretch };
         for (var i = 0; i < count; i++) grid.ColumnDefinitions.Add(new ColumnDefinition());
-        grid.Loaded += (_, _) => { for (var i = 0; i < grid.Children.Count; i++) Grid.SetColumn((FrameworkElement)grid.Children[i], i % count); };
+        grid.Loaded += (_, _) =>
+        {
+            var rowCount = Math.Max(1, (int)Math.Ceiling(grid.Children.Count / (double)count));
+            while (grid.RowDefinitions.Count < rowCount) grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            for (var i = 0; i < grid.Children.Count; i++)
+            {
+                Grid.SetColumn((FrameworkElement)grid.Children[i], i % count);
+                Grid.SetRow((FrameworkElement)grid.Children[i], i / count);
+            }
+        };
         return grid;
     }
 
-    private StackPanel Row() => new() { Orientation = Orientation.Horizontal, Spacing = 8 };
+    private StackPanel Row() => new() { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
     private StackPanel RowWith(params UIElement[] controls) { var row = Row(); foreach (var c in controls) row.Children.Add(c); return row; }
-    private Button ActionButton(string text, RoutedEventHandler handler, bool primary = false) { var b = new Button { Content = text }; if (primary) b.Style = (Style)Application.Current.Resources["PrimaryButtonStyle"]; b.Click += handler; return b; }
+    private Button ActionButton(string text, RoutedEventHandler handler, bool primary = false) { var b = new Button { Content = text, MinHeight = 34, Padding = new Thickness(12, 5, 12, 5), HorizontalAlignment = HorizontalAlignment.Stretch }; if (primary) b.Style = (Style)Application.Current.Resources["PrimaryButtonStyle"]; b.Click += handler; return b; }
     private TextBox Input(string header, string value) => new() { Header = header, Text = value };
-    private NumberBox Number(string header, double value, double min, double max) => new() { Header = header, Value = value, Minimum = min, Maximum = max, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, MinWidth = 145 };
+    private NumberBox Number(string header, double value, double min, double max) => new() { Header = header, Value = value, Minimum = min, Maximum = max, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, MinWidth = 112, HorizontalAlignment = HorizontalAlignment.Stretch };
     private TextBox ReadOnlyField(string header, string value) => new() { Header = header, Text = value, IsReadOnly = true, FontFamily = new FontFamily("Cascadia Mono"), TextWrapping = TextWrapping.Wrap };
     private StackPanel KeyValue(string key, string value) => RowWith(new TextBlock { Text = key, Width = 180, Foreground = Brush("TextSecondaryBrush") }, new TextBlock { Text = value });
-    private Border AuthGate() => new() { Background = new SolidColorBrush(ColorHelper.FromArgb(38, 244, 184, 96)), BorderBrush = Brush("WarningBrush"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(12), Child = new TextBlock { Text = "Controls are gated by connection + manifest authorization. Settings remain available from the top bar.", Foreground = Brush("WarningBrush") } };
+    private Border AuthGate() => new() { Background = new SolidColorBrush(ColorHelper.FromArgb(38, 244, 184, 96)), BorderBrush = Brush("WarningBrush"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 7, 10, 7), Child = new TextBlock { Text = "Controls require this card's verified manifest.", Foreground = Brush("WarningBrush") } };
     private Grid CheckRow(string name, string rule, string stateName) { var g = new Grid { Padding = new Thickness(0, 8, 0, 8) }; g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) }); g.ColumnDefinitions.Add(new ColumnDefinition()); g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) }); g.Children.Add(new TextBlock { Text = name }); var r = new TextBlock { Text = rule, Foreground = Brush("TextSecondaryBrush") }; Grid.SetColumn(r, 1); g.Children.Add(r); var state = new TextBlock { Name = stateName, Text = "NOT CHECKED", Foreground = Brush("WarningBrush"), FontSize = 11, HorizontalAlignment = HorizontalAlignment.Right }; Grid.SetColumn(state, 2); g.Children.Add(state); return g; }
     private Border StepChip(string number, string label, bool active) => new() { Background = active ? new SolidColorBrush(ColorHelper.FromArgb(48, 57, 198, 212)) : Brush("RaisedBrush"), BorderBrush = active ? Brush("AccentBrush") : Brush("BorderBrush"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(16), Padding = new Thickness(12, 6, 12, 6), Child = new TextBlock { Text = $"{number}  {label}", FontSize = 11, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = active ? Brush("AccentBrush") : Brush("TextSecondaryBrush") } };
     private Grid IndicatorRow(string a, string av, string b, string bv) { var g = Columns(2); g.Children.Add(KeyValue(a, av)); g.Children.Add(KeyValue(b, bv)); return g; }
@@ -585,8 +687,149 @@ public sealed partial class MainWindow : Window
         grid.Children.Add(new TextBlock { Text = label, Foreground = Brush("TextSecondaryBrush") });
         Grid.SetColumn(text, 1); grid.Children.Add(text); return grid;
     }
-    private Border TestSuite(string title, IEnumerable<string> tests) { var p = new StackPanel { Spacing = 9 }; p.Children.Add(new TextBlock { Text = title, Style = (Style)Application.Current.Resources["SectionTitleStyle"] }); foreach (var test in tests) p.Children.Add(RowWith(new FontIcon { Glyph = "\uE73E", Foreground = Brush("TextSecondaryBrush") }, new TextBlock { Text = test })); return new Border { Style = (Style)Application.Current.Resources["CardStyle"], Margin = new Thickness(4), Child = p }; }
+    private Border TestSuite(string title, IEnumerable<string> tests) { var p = new StackPanel { Spacing = 9 }; p.Children.Add(new TextBlock { Text = title, Style = (Style)Application.Current.Resources["SectionTitleStyle"] }); foreach (var test in tests) p.Children.Add(RowWith(new FontIcon { Glyph = "\uE73E", Foreground = Brush("TextSecondaryBrush") }, new TextBlock { Text = test })); return new Border { Style = (Style)Application.Current.Resources["CardStyle"], Child = p }; }
     private SolidColorBrush Brush(string key) => (SolidColorBrush)Application.Current.Resources[key];
+
+    private UIElement BuildWs2812ColorPreview()
+    {
+        var preview = new Border
+        {
+            Name = "AsmColorPreview", Width = 64, Height = 64, Background = new SolidColorBrush(_selectedWs2812Color),
+            BorderBrush = Brush("BorderBrush"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8)
+        };
+        return new StackPanel
+        {
+            Spacing = 5, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                preview,
+                new TextBlock { Name = "AsmColorHexValue", Text = "#000000", FontFamily = new FontFamily("Cascadia Mono"), FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center }
+            }
+        };
+    }
+
+    private Grid BuildRgbSlider(string name, string label, SolidColorBrush accent)
+    {
+        var slider = new Slider
+        {
+            Name = name, Minimum = 0, Maximum = 255, StepFrequency = 1, SmallChange = 1, LargeChange = 16,
+            Foreground = accent, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Center,
+            MinWidth = 140
+        };
+        slider.ValueChanged += Ws2812Channel_ValueChanged;
+        var value = new TextBlock
+        {
+            Name = $"{name}Value", Text = "0", FontFamily = new FontFamily("Cascadia Mono"), FontSize = 12,
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center
+        };
+        var row = new Grid { Height = 29, ColumnSpacing = 8 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(14) });
+        row.ColumnDefinitions.Add(new ColumnDefinition());
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+        row.Children.Add(new TextBlock { Text = label, Foreground = accent, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+        Grid.SetColumn(slider, 1); row.Children.Add(slider);
+        Grid.SetColumn(value, 2); row.Children.Add(value);
+        return row;
+    }
+
+    private void Ws2812Channel_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs args)
+    {
+        if (sender is not Slider slider) return;
+        SetText($"{slider.Name}Value", Math.Round(args.NewValue).ToString());
+        if (_syncingWs2812Color) return;
+        var channels = ReadWs2812Channels();
+        _selectedWs2812Color = Color.FromArgb(255, (byte)channels.R, (byte)channels.G, (byte)channels.B);
+        UpdateWs2812ColorPreview();
+    }
+
+    private (ushort R, ushort G, ushort B) ReadWs2812Channels() =>
+        (SliderChannel("AsmLedRed"), SliderChannel("AsmLedGreen"), SliderChannel("AsmLedBlue"));
+
+    private ushort SliderChannel(string name)
+    {
+        var slider = FindNameInPages<Slider>(name) ?? throw new InvalidOperationException($"{name} control is unavailable.");
+        return (ushort)Math.Clamp(Math.Round(slider.Value), 0, 255);
+    }
+
+    private void SetWs2812ColorChannels(ushort red, ushort green, ushort blue)
+    {
+        var channels = new[] { ("AsmLedRed", red), ("AsmLedGreen", green), ("AsmLedBlue", blue) };
+        _syncingWs2812Color = true;
+        foreach (var (name, rawValue) in channels)
+        {
+            var value = Math.Min(rawValue, (ushort)255);
+            if (FindNameInPages<Slider>(name) is { } slider) slider.Value = value;
+            SetText($"{name}Value", value.ToString());
+        }
+        _syncingWs2812Color = false;
+        _selectedWs2812Color = Color.FromArgb(255, (byte)Math.Min(red, (ushort)255), (byte)Math.Min(green, (ushort)255), (byte)Math.Min(blue, (ushort)255));
+        UpdateWs2812ColorPreview();
+    }
+
+    private void UpdateWs2812ColorPreview()
+    {
+        if (FindNameInPages<Border>("AsmColorPreview") is { } preview) preview.Background = new SolidColorBrush(_selectedWs2812Color);
+        SetText("AsmColorHexValue", $"#{_selectedWs2812Color.R:X2}{_selectedWs2812Color.G:X2}{_selectedWs2812Color.B:X2}");
+    }
+
+    internal static (ushort R, ushort G, ushort B) Ws2812Channels(Color color) => (color.R, color.G, color.B);
+
+    private Grid InputIndicator(string label, string textName, string dotName)
+    {
+        var dot = new Microsoft.UI.Xaml.Shapes.Ellipse { Name = dotName, Width = 12, Height = 12, Fill = Brush("ErrorBrush"), VerticalAlignment = VerticalAlignment.Center };
+        var text = new TextBlock { Name = textName, Text = "Inactive", FontFamily = new FontFamily("Cascadia Mono"), FontSize = 12, HorizontalAlignment = HorizontalAlignment.Right };
+        var grid = new Grid { Height = 30, ColumnSpacing = 8 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); grid.ColumnDefinitions.Add(new ColumnDefinition()); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.Children.Add(dot); var title = new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center }; Grid.SetColumn(title, 1); grid.Children.Add(title); Grid.SetColumn(text, 2); grid.Children.Add(text);
+        return grid;
+    }
+
+    private Grid BuildFanIndicator()
+    {
+        var fan = new Grid { Name = "AsmFan", Width = 24, Height = 24, VerticalAlignment = VerticalAlignment.Center, RenderTransformOrigin = new Windows.Foundation.Point(0.5, 0.5), RenderTransform = new RotateTransform() };
+        foreach (var angle in new[] { 0d, 120d, 240d })
+        {
+            var bladeLayer = new Grid { Width = 24, Height = 24, RenderTransformOrigin = new Windows.Foundation.Point(0.5, 0.5), RenderTransform = new RotateTransform { Angle = angle } };
+            bladeLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Ellipse { Width = 7, Height = 10, Fill = Brush("AccentBrush"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 1, 0, 0) });
+            fan.Children.Add(bladeLayer);
+        }
+        fan.Children.Add(new Microsoft.UI.Xaml.Shapes.Ellipse { Width = 6, Height = 6, Fill = Brush("AccentBrush"), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+        return fan;
+    }
+
+    private void SetInputIndicator(string textName, string dotName, bool active)
+    {
+        SetText(textName, active ? "Active" : "Inactive");
+        if (FindNameInPages<Microsoft.UI.Xaml.Shapes.Ellipse>(dotName) is not { } dot) return;
+        dot.Fill = active ? Brush("SuccessBrush") : Brush("ErrorBrush");
+        if (active)
+        {
+            if (!_indicatorAnimations.TryGetValue(dotName, out var pulse))
+            {
+                var animation = new DoubleAnimation { From = 1, To = 0.35, Duration = TimeSpan.FromMilliseconds(500), AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever };
+                Storyboard.SetTarget(animation, dot); Storyboard.SetTargetProperty(animation, "Opacity");
+                pulse = new Storyboard(); pulse.Children.Add(animation); _indicatorAnimations[dotName] = pulse;
+            }
+            pulse.Begin();
+        }
+        else if (_indicatorAnimations.TryGetValue(dotName, out var pulse)) { pulse.Stop(); dot.Opacity = 1; }
+    }
+
+    private void UpdateFanAnimation(bool running)
+    {
+        if (FindNameInPages<Grid>("AsmFan") is not { } fan) return;
+        if (running)
+        {
+            if (_fanAnimation is null)
+            {
+                var rotation = new DoubleAnimation { From = 0, To = 360, Duration = TimeSpan.FromMilliseconds(700), RepeatBehavior = RepeatBehavior.Forever };
+                Storyboard.SetTarget(rotation, fan); Storyboard.SetTargetProperty(rotation, "(UIElement.RenderTransform).(RotateTransform.Angle)");
+                _fanAnimation = new Storyboard(); _fanAnimation.Children.Add(rotation);
+            }
+            _fanAnimation.Begin();
+        }
+        else { _fanAnimation?.Stop(); if (fan.RenderTransform is RotateTransform transform) transform.Angle = 0; }
+    }
 
     private void GenerateKey()
     {
@@ -702,18 +945,13 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            _loadedManifest = await _manifestService.LoadAsync(file.Path);
-            _loadedManifestPath = file.Path;
-            FindNameInPages<TextBlock>("ManifestFileText")!.Text = file.Name;
-            _authorized = false;
+            await LoadManifestAsync(file.Path, persist: true);
             AuthText.Text = "VALIDATION REQUIRED";
             AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(48, 244, 184, 96));
 
-            if (_stepperIdentity is not null)
+            if (_connected)
             {
-                _stepperIdentity = await _stepperModbus.ReadIdentityAsync();
-                ApplyStepperIdentity(_stepperIdentity);
-                ApplyManifestValidation(_manifestService.Validate(_stepperIdentity, _loadedManifest));
+                ValidateManifestAgainstConnectedCards();
             }
             else
             {
@@ -722,34 +960,37 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            _loadedManifest = null;
-            _loadedManifestPath = null;
-            _authorized = false;
             AuthText.Text = "MANIFEST INVALID";
             AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(48, 255, 107, 107));
-            SetStatus($"Manifest import failed: {ex.Message}");
+            SetStatus($"Manifest import failed; existing trusted card manifests were preserved: {ex.Message}");
         }
     }
 
     private async Task AuthorizeAsync()
     {
-        if (!_connected || _stepperIdentity is null)
+        if (!_connected || (_stepperIdentity is null && _asmIdentity is null))
         {
             SetStatus("Authorization blocked: connect and read a card first.");
             return;
         }
-        if (_loadedManifest is null)
+        if (_trustedManifests.Count == 0)
         {
-            SetStatus("Authorization blocked: import a provisioning manifest first.");
+            SetStatus("Authorization blocked: import the manifest for each card you want to control.");
             return;
         }
 
         try
         {
             SetStatus("Re-reading live card identity before authorization...");
-            _stepperIdentity = await _stepperModbus.ReadIdentityAsync();
-            ApplyStepperIdentity(_stepperIdentity);
-            ApplyManifestValidation(_manifestService.Validate(_stepperIdentity, _loadedManifest));
+            if (_asmIdentity is not null) _asmIdentity = await _stepperModbus.ReadIdentityAsync(_stepperModbus.AsmSlaveId);
+            if (_stepperIdentity is not null && FirmwareTargetProfile.FromSerial(_stepperIdentity.SerialNumber)?.Id == "stepper")
+                _stepperIdentity = await _stepperModbus.ReadIdentityAsync(_stepperModbus.StepperSlaveId);
+            else if (_asmIdentity is not null)
+                _stepperIdentity = _asmIdentity;
+            if (_asmIdentity is not null) SetCardIdentityHeader("asm", _asmIdentity.SerialNumber, _asmIdentity.CustomerId10);
+            if (_stepperIdentity is not null && FirmwareTargetProfile.FromSerial(_stepperIdentity.SerialNumber)?.Id == "stepper")
+                SetCardIdentityHeader("stepper", _stepperIdentity.SerialNumber, _stepperIdentity.CustomerId10);
+            ValidateManifestAgainstConnectedCards();
         }
         catch (Exception ex)
         {
@@ -824,7 +1065,7 @@ public sealed partial class MainWindow : Window
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e) { PositionSettingsDrawer(); SettingsPopup.IsOpen = true; }
     private void CloseSettings_Click(object sender, RoutedEventArgs e) => SettingsPopup.IsOpen = false;
-    private void PositionSettingsDrawer() { SettingsPopup.HorizontalOffset = Math.Max(0, Bounds.Width - 444); SettingsPopup.VerticalOffset = 76; }
+    private void PositionSettingsDrawer() { SettingsPopup.HorizontalOffset = Math.Max(0, Bounds.Width - 444); SettingsPopup.VerticalOffset = 84; }
 
     private void WizardBack_Click(object sender, RoutedEventArgs e) => ShowWizardStep(Math.Max(1, _wizardStep - 1));
 
@@ -874,29 +1115,34 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var selected = (HardwareProfileBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "auto";
-        var requestedProfile = selected == "auto" ? null : FirmwareTargetProfile.FromId(selected);
-        if (requestedProfile is not null) SetFirmwareTarget(requestedProfile);
-
         try
         {
             var baud = int.Parse(((ComboBoxItem)BaudBox.SelectedItem).Content.ToString()!);
-            var slave = checked((byte)Math.Round(SlaveIdBox.Value));
-            SetStatus($"Opening {selectedPort.PortName} at {baud} baud, slave {slave}...");
-            _stepperIdentity = await _stepperModbus.ConnectAndReadIdentityAsync(selectedPort.PortName, baud, slave);
-            var detectedProfile = FirmwareTargetProfile.FromSerial(_stepperIdentity.SerialNumber);
-            if (detectedProfile is null && requestedProfile is null)
-                throw new InvalidDataException($"Automatic hardware detection could not classify serial {_stepperIdentity.SerialNumber}. Select ASM or Stepper explicitly.");
-            var effectiveProfile = detectedProfile ?? requestedProfile!;
-            _deviceProfile = effectiveProfile.Id;
-            SetFirmwareTarget(effectiveProfile);
+            var asmSlave = checked((byte)Math.Round(AsmSlaveIdBox.Value));
+            var stepperSlave = checked((byte)Math.Round(StepperSlaveIdBox.Value));
+            if (asmSlave == stepperSlave) throw new InvalidOperationException("ASM and Stepper must use different slave IDs.");
+            ClearCardIdentityHeaders();
+            SetStatus($"Opening {selectedPort.PortName} at {baud} baud; probing ASM {asmSlave} and Stepper {stepperSlave}...");
+            await _stepperModbus.OpenAsync(selectedPort.PortName, baud);
+            _stepperModbus.AsmSlaveId = asmSlave; _stepperModbus.StepperSlaveId = stepperSlave;
+            _asmIdentity = await TryReadIdentityAsync(asmSlave, "asm");
+            _stepperIdentity = await TryReadIdentityAsync(stepperSlave, "stepper");
+            if (_asmIdentity is null && _stepperIdentity is null) throw new IOException("Neither configured slave returned a valid identity.");
+            _deviceProfile = _asmIdentity is not null && _stepperIdentity is not null ? "both" : _asmIdentity is not null ? "asm" : "stepper";
+            var provisioningProfile = FirmwareTargetProfile.ResolveConnectedTarget(
+                _firmwareTarget,
+                _asmIdentity is not null,
+                _stepperIdentity is not null);
+            var primary = provisioningProfile.Id == "asm" ? _asmIdentity! : _stepperIdentity!;
+            _stepperIdentity ??= primary; // Legacy Admin provisioning uses this as the active identity.
+            SetFirmwareTarget(provisioningProfile);
             _connected = true;
-            _authorized = false;
+            _authorized = _asmAuthorized = _stepperAuthorized = false;
             _customerIdSession = null;
             ResetProvisioningPhases();
-            if (_stepperIdentity.CustomerId10 == "0000000000")
+            if (primary.CustomerId10 == "0000000000")
             {
-                ApplyStepperIdentity(_stepperIdentity);
+                ApplyStepperIdentity(primary);
                 _defaultBaselineVerified = true;
                 SetPhaseStatus("Phase1Status", "COMPLETE — blank default firmware detected", "SuccessBrush");
                 SetPhaseStatus("Phase2Status", "READY — enter assigned serial", "AccentBrush");
@@ -907,13 +1153,13 @@ public sealed partial class MainWindow : Window
             else
             {
                 var recovered = await CustomerIdProvisioningService.LoadForDeviceAsync(
-                    _stepperIdentity.DeviceId96, _deviceProfile);
+                    primary.DeviceId96, provisioningProfile.Id);
                 if (recovered is not null &&
-                    string.Equals(recovered.SerialNumber, _stepperIdentity.SerialNumber, StringComparison.Ordinal) &&
-                    string.Equals(recovered.CustomerId, _stepperIdentity.CustomerId10, StringComparison.Ordinal))
+                    string.Equals(recovered.SerialNumber, primary.SerialNumber, StringComparison.Ordinal) &&
+                    string.Equals(recovered.CustomerId, primary.CustomerId10, StringComparison.Ordinal))
                 {
                     _customerIdSession = recovered;
-                    ApplyStepperIdentity(_stepperIdentity);
+                    ApplyStepperIdentity(primary);
                     _defaultBaselineVerified = true;
                     _assignedIdentityVerified = true;
                     SetPhaseStatus("Phase1Status", "COMPLETE — recovered provisioning baseline", "SuccessBrush");
@@ -923,7 +1169,7 @@ public sealed partial class MainWindow : Window
                     if (File.Exists(manifestPath))
                     {
                         var manifest = await _manifestService.LoadAsync(manifestPath);
-                        var validation = _manifestService.Validate(_stepperIdentity, manifest);
+                        var validation = _manifestService.Validate(primary, manifest);
                         if (validation.IsAuthorized)
                         {
                             _publicKeyVerified = true;
@@ -934,14 +1180,14 @@ public sealed partial class MainWindow : Window
                 }
                 else
                 {
-                    ApplyStepperIdentity(_stepperIdentity);
+                    ApplyStepperIdentity(primary);
                     _defaultBaselineVerified = false;
-                    SetPhaseStatus("Phase1Status", $"ACTION REQUIRED — card Customer ID is {_stepperIdentity.CustomerId10}", "WarningBrush");
+                    SetPhaseStatus("Phase1Status", $"ACTION REQUIRED — card Customer ID is {primary.CustomerId10}", "WarningBrush");
                     SetPhaseStatus("Phase2Status", "LOCKED — establish default baseline", "TextSecondaryBrush");
                 }
             }
             string cdiResult;
-            if (_stepperIdentity.CustomerId10 == "0000000000")
+            if (primary.CustomerId10 == "0000000000")
             {
                 cdiResult = " Enter the assigned serial to create the final CDI.";
             }
@@ -954,35 +1200,110 @@ public sealed partial class MainWindow : Window
             {
                 cdiResult = $" CDI is retained internally, but database save failed: {cdiException.Message}";
             }
-            if (_deviceProfile == "stepper") await RefreshStepperLiveStatusAsync();
+            if (provisioningProfile.Id == "stepper") await RefreshStepperLiveStatusAsync();
+            if (_asmIdentity is not null) StartInputPolling();
             ConnectionDot.Fill = Brush("SuccessBrush"); ConnectionText.Text = "Connected"; DisconnectButton.IsEnabled = true;
-            DeviceTypeText.Text = $"{_firmwareTarget.DisplayName} • Product {_stepperIdentity.ProductCode}";
-            SerialText.Text = $"SERIAL {_stepperIdentity.SerialNumber}";
-            if (_loadedManifest is not null)
+            DeviceTypeText.Text = _deviceProfile == "both" ? "2 cards online" : _deviceProfile == "asm" ? $"ASM · ID {asmSlave}" : $"Stepper · ID {stepperSlave}";
+            if (_asmIdentity is not null) SetCardIdentityHeader("asm", _asmIdentity.SerialNumber, _asmIdentity.CustomerId10);
+            if (_stepperIdentity is not null && FirmwareTargetProfile.FromSerial(_stepperIdentity.SerialNumber)?.Id == "stepper")
+                SetCardIdentityHeader("stepper", _stepperIdentity.SerialNumber, _stepperIdentity.CustomerId10);
+            await LoadKnownManifestsForConnectedCardsAsync();
+            if (_trustedManifests.Count > 0)
             {
-                ApplyManifestValidation(_manifestService.Validate(_stepperIdentity, _loadedManifest));
+                ValidateManifestAgainstConnectedCards();
             }
             else
             {
                 AuthText.Text = "NOT AUTHORIZED";
             }
             SettingsPopup.IsOpen = false;
-            var blankNotice = _stepperIdentity.CustomerId10 == "0000000000" ? " Blank card: assigned serial is required before Customer ID generation." : string.Empty;
-            SetStatus($"{_firmwareTarget.DisplayName} read through {selectedPort.DisplayName}, slave {slave}. Identity registers are available.{cdiResult}{blankNotice}");
+            var blankNotice = primary.CustomerId10 == "0000000000" ? " Blank card: assigned serial is required before Customer ID generation." : string.Empty;
+            var stepperDetected = _stepperIdentity is not null &&
+                                  FirmwareTargetProfile.FromSerial(_stepperIdentity.SerialNumber)?.Id == "stepper";
+            SetStatus($"{(_asmIdentity is not null ? $"ASM slave {asmSlave}" : "ASM not found")}; {(stepperDetected ? $"Stepper slave {stepperSlave}" : "Stepper not found")} on {selectedPort.DisplayName}. Selected reflash target: {provisioningProfile.DisplayName}.{cdiResult}{blankNotice}");
             SelectNavigation("firmware");
         }
         catch (Exception ex)
         {
             _connected = false;
-            SetStatus($"Card connection/read failed: {ex.Message} Check the selected hardware profile, COM settings, and slave address.");
+            SetStatus($"Card connection/read failed: {ex.Message} Check the COM settings and both slave addresses.");
         }
+    }
+
+    private void ValidateManifestAgainstConnectedCards()
+    {
+        _trustedManifests.TryGetValue("asm", out var asmManifest);
+        _trustedManifests.TryGetValue("stepper", out var stepperManifest);
+        var actualStepper = _stepperIdentity is not null &&
+                            FirmwareTargetProfile.FromSerial(_stepperIdentity.SerialNumber)?.Id == "stepper"
+            ? _stepperIdentity
+            : null;
+        var authorization = _manifestService.ValidateConnectedCards(_asmIdentity, asmManifest, actualStepper, stepperManifest);
+        _asmAuthorized = authorization.AsmAuthorized;
+        _stepperAuthorized = authorization.StepperAuthorized;
+        _authorized = authorization.AnyAuthorized;
+
+        var displayed = authorization.Stepper ?? authorization.Asm;
+        if (displayed is not null)
+        {
+            SetAuthCheck("AuthSerial", displayed.SerialMatches);
+            SetAuthCheck("AuthDevice", displayed.DeviceIdMatches);
+            SetAuthCheck("AuthCustomer", displayed.CustomerIdMatches);
+            SetAuthCheck("AuthKey", displayed.PublicKeyMatches);
+            SetAuthCheck("AuthFingerprint", displayed.FingerprintMatches);
+            SetAuthCheck("AuthFirmware", displayed.FirmwarePolicyMatches);
+        }
+
+        AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(
+            48,
+            _authorized ? (byte)72 : (byte)255,
+            _authorized ? (byte)199 : (byte)107,
+            _authorized ? (byte)142 : (byte)107));
+        AuthText.Text = authorization.AuthorizedCount switch
+        {
+            2 => "2 CARDS VERIFIED",
+            1 when _asmAuthorized => "ASM VERIFIED",
+            1 => "STEPPER VERIFIED",
+            _ => "NOT AUTHORIZED"
+        };
+
+        var missing = string.Join(" + ", new[]
+        {
+            _asmIdentity is not null && asmManifest is null ? "ASM manifest" : null,
+            actualStepper is not null && stepperManifest is null ? "Stepper manifest" : null
+        }.Where(value => value is not null));
+        if (_authorized)
+        {
+            var targets = string.Join(" + ", new[] { _asmAuthorized ? "ASM" : null, _stepperAuthorized ? "Stepper" : null }.Where(value => value is not null));
+            SetStatus(string.IsNullOrWhiteSpace(missing)
+                ? $"Verified controls enabled for {targets}."
+                : $"Verified controls enabled for {targets}; import the {missing} to unlock the other card.");
+        }
+        else
+        {
+            SetStatus(string.IsNullOrWhiteSpace(missing)
+                ? "Connected card manifests did not pass identity verification."
+                : $"Controls remain locked: import the {missing}.");
+        }
+    }
+
+    private async Task<StepperIdentity?> TryReadIdentityAsync(byte slaveId, string expectedProfile)
+    {
+        try
+        {
+            var identity = await _stepperModbus.ReadIdentityAsync(slaveId);
+            return FirmwareTargetProfile.FromSerial(identity.SerialNumber)?.Id == expectedProfile ? identity : null;
+        }
+        catch { return null; }
     }
 
     private async void DisconnectButton_Click(object sender, RoutedEventArgs e)
     {
+        StopRainbowSweep(false);
+        _inputPollTimer.Stop();
         await _stepperModbus.DisconnectAsync();
         UpdateCustomerIdStatus(null);
-        _connected = false; _authorized = false; _deviceProfile = "none"; _customerIdSession = null; ResetProvisioningPhases(); ConnectionDot.Fill = Brush("ErrorBrush"); ConnectionText.Text = "Disconnected"; DeviceTypeText.Text = "No hardware selected"; SerialText.Text = "SERIAL —"; AuthText.Text = "NOT AUTHORIZED"; AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(51, 43, 55, 70)); DisconnectButton.IsEnabled = false; SetStatus("Disconnected. Authorization and hardware writes were cleared.");
+        _connected = false; _authorized = _asmAuthorized = _stepperAuthorized = false; _asmIdentity = _stepperIdentity = null; _customerIdSession = null; ResetProvisioningPhases(); _deviceProfile = "none"; ConnectionDot.Fill = Brush("ErrorBrush"); ConnectionText.Text = "Disconnected"; DeviceTypeText.Text = "No cards"; ClearCardIdentityHeaders(); AuthText.Text = "NOT AUTHORIZED"; AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(51, 43, 55, 70)); DisconnectButton.IsEnabled = false; SetStatus("Disconnected. Authorization and hardware writes were cleared.");
     }
 
     private async void RefreshPorts_Click(object sender, RoutedEventArgs e) =>
@@ -1032,7 +1353,10 @@ public sealed partial class MainWindow : Window
     {
         if (!_connected) { SetStatus("Service unlock requires a connected card."); return; }
         if (string.IsNullOrWhiteSpace(MasterPasswordBox.Password)) { SetStatus("Enter the service password."); return; }
-        _authorized = true; MasterPasswordBox.Password = string.Empty; AuthText.Text = "SERVICE OVERRIDE"; AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(48, 244, 184, 96)); SettingsPopup.IsOpen = false; SetStatus("Temporary service override active for this connection.");
+        _authorized = true;
+        _asmAuthorized = _asmIdentity is not null;
+        _stepperAuthorized = _stepperIdentity is not null && FirmwareTargetProfile.FromSerial(_stepperIdentity.SerialNumber)?.Id == "stepper";
+        MasterPasswordBox.Password = string.Empty; AuthText.Text = "SERVICE OVERRIDE"; AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(48, 244, 184, 96)); SettingsPopup.IsOpen = false; SetStatus("Temporary service override active for this connection.");
     }
 
     private void SetStatus(string message) => StatusText.Text = $"{DateTime.Now:HH:mm:ss}  {message}";
@@ -1041,36 +1365,84 @@ public sealed partial class MainWindow : Window
     {
         if (string.IsNullOrWhiteSpace(customerId) || customerId == "0000000000")
         {
-            CustomerIdTopText.Text = "CUST ID 0000000000";
-            CustomerIdStatusText.Text = "CUST ID  0000000000  /  UNPROVISIONED";
+            CustomerIdStatusText.Text = $"{_firmwareTarget.Id.ToUpperInvariant()}  CUST ID  0000000000  /  UNPROVISIONED";
             CustomerIdStatusText.Foreground = Brush("WarningBrush");
             return;
         }
 
-        CustomerIdTopText.Text = $"CUST ID {customerId}";
         CustomerIdStatusText.Text = pendingFlash
-            ? $"CUST ID  {customerId}  /  GENERATED - PENDING FLASH"
-            : $"CUST ID  {customerId}  /  FLASHED";
+            ? $"{_firmwareTarget.Id.ToUpperInvariant()}  CUST ID  {customerId}  /  PENDING FLASH"
+            : $"{_firmwareTarget.Id.ToUpperInvariant()}  CUST ID  {customerId}  /  FLASHED";
         CustomerIdStatusText.Foreground = pendingFlash ? Brush("AccentBrush") : Brush("SuccessBrush");
+    }
+
+    private void SetCardIdentityHeader(string profileId, string serialNumber, string customerId, bool pendingFlash = false)
+    {
+        var isAsm = string.Equals(profileId, "asm", StringComparison.OrdinalIgnoreCase);
+        var group = isAsm ? AsmIdentityGroup : StepperIdentityGroup;
+        var serial = isAsm ? AsmSerialTopText : StepperSerialTopText;
+        var customer = isAsm ? AsmCustomerIdTopText : StepperCustomerIdTopText;
+        group.Visibility = Visibility.Visible;
+        serial.Text = serialNumber;
+        customer.Text = customerId;
+        customer.Foreground = pendingFlash
+            ? Brush("AccentBrush")
+            : customerId == "0000000000" ? Brush("WarningBrush") : Brush("TextPrimaryBrush");
+        UpdateWindowTitleSerials();
+    }
+
+    private void ClearCardIdentityHeaders()
+    {
+        AsmIdentityGroup.Visibility = Visibility.Collapsed;
+        StepperIdentityGroup.Visibility = Visibility.Collapsed;
+        AsmSerialTopText.Text = StepperSerialTopText.Text = "—";
+        AsmCustomerIdTopText.Text = StepperCustomerIdTopText.Text = "0000000000";
+        UpdateWindowTitleSerials();
+    }
+
+    private void UpdateWindowTitleSerials()
+    {
+        Title = FormatWindowTitle(
+            DisplayVersion,
+            AsmIdentityGroup.Visibility == Visibility.Visible ? AsmSerialTopText.Text : null,
+            StepperIdentityGroup.Visibility == Visibility.Visible ? StepperSerialTopText.Text : null);
+    }
+
+    internal static string FormatWindowTitle(string version, string? asmSerial, string? stepperSerial)
+    {
+        var cards = new List<string>(2);
+        if (!string.IsNullOrWhiteSpace(asmSerial)) cards.Add($"ASM {asmSerial}");
+        if (!string.IsNullOrWhiteSpace(stepperSerial)) cards.Add($"Stepper {stepperSerial}");
+        var suffix = cards.Count == 0 ? string.Empty : $"  —  {string.Join("  |  ", cards)}";
+        return $"◆ Unified Test & Keygen Dashboard  v{version}{suffix}";
     }
 
     private void FirmwareTarget_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (sender is not ComboBox box || box.SelectedItem is not ComboBoxItem item) return;
         var requested = item.Tag?.ToString() ?? "stepper";
-        if (_connected && !string.Equals(requested, _deviceProfile, StringComparison.OrdinalIgnoreCase))
+        if (_connected && _deviceProfile != "both" && !string.Equals(requested, _deviceProfile, StringComparison.OrdinalIgnoreCase))
         {
             box.SelectedIndex = _deviceProfile == "asm" ? 1 : 0;
             SetStatus("Firmware target must match the connected hardware profile. Disconnect before changing it.");
             return;
         }
-        SetFirmwareTarget(FirmwareTargetProfile.FromId(requested));
+        var selected = FirmwareTargetProfile.FromId(requested);
+        SetFirmwareTarget(selected);
+        SetStatus($"Selected firmware target: {selected.DisplayName}. Reflash will use {selected.LocalRoot}.");
     }
 
     private void SetFirmwareTarget(FirmwareTargetProfile profile)
     {
         _firmwareTarget = profile;
         _firmwareProvisioning = new FirmwareProvisioningService(profile);
+        _maintenanceReflashRequested = false;
+        _maintenanceExpectedCdi = null;
+        _maintenanceManifest = null;
+        _maintenanceManifestPath = null;
+        _maintenanceElfSha256 = null;
+        _maintenanceTarget = null;
+        _maintenanceProvisioning = null;
         _firmwarePrepared = false;
         _firmwareBuilt = false;
         _stLinkReady = false;
@@ -1089,6 +1461,117 @@ public sealed partial class MainWindow : Window
         if (product is not null) product.Text = profile.Id == "asm" ? "VCB240002 ASM I/O Card" : "Stepper Control Card V2";
         if (serialInput is not null) serialInput.PlaceholderText = profile.Id == "asm" ? "A26050605" : "S26050606";
     }
+
+    private void StartInputPolling()
+    {
+        var interval = double.IsNaN(LiveStatusIntervalBox.Value) ? 300 : Math.Clamp(LiveStatusIntervalBox.Value, 100, 5000);
+        _inputPollTimer.Interval = TimeSpan.FromMilliseconds(interval);
+        _inputPollTimer.Start();
+    }
+
+    private async void InputPollTimer_Tick(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args)
+    {
+        if (_inputPollInProgress || !_connected || _asmIdentity is null || !_stepperModbus.IsConnected) return;
+        _inputPollInProgress = true;
+        try
+        {
+            var status = await _stepperModbus.ReadAsmInputStatusAsync();
+            SetInputIndicator("AsmIp1", "AsmIp1Dot", (status & 0x0008) != 0);
+            SetInputIndicator("AsmIp2", "AsmIp2Dot", (status & 0x0010) != 0);
+            SetText("AsmModbusStatus", (status & 0x0020) != 0 ? "Error" : "Online");
+        }
+        catch
+        {
+            SetText("AsmModbusStatus", "Polling error");
+        }
+        finally { _inputPollInProgress = false; }
+    }
+
+    private async Task RestoreManifestAsync()
+    {
+        var restored = 0;
+        foreach (var profile in new[] { "asm", "stepper" })
+        {
+            var preference = ManifestPreferenceFile(profile);
+            if (!File.Exists(preference)) continue;
+            var profilePath = (await File.ReadAllTextAsync(preference)).Trim();
+            if (!File.Exists(profilePath)) continue;
+            try
+            {
+                await LoadManifestAsync(profilePath, persist: false);
+                restored++;
+            }
+            catch (Exception ex)
+            {
+                SetStatus($"Saved {profile} manifest could not be loaded: {ex.Message}");
+            }
+        }
+        if (restored > 0)
+        {
+            SetStatus($"Restored {restored} trusted card manifest{(restored == 1 ? string.Empty : "s")}.");
+            return;
+        }
+
+        var saved = File.Exists(ManifestPreferencePath) ? (await File.ReadAllTextAsync(ManifestPreferencePath)).Trim() : null;
+        var path = !string.IsNullOrWhiteSpace(saved) && File.Exists(saved) ? saved : DefaultManifestPath;
+        if (!File.Exists(path))
+        {
+            UpdateManifestSlotDisplay();
+            SetStatus("No previous manifest was found. Import one, or place default_manifest.json in the manifests folder.");
+            return;
+        }
+
+        try
+        {
+            await LoadManifestAsync(path, persist: false);
+            SetStatus(path == saved ? $"Restored manifest: {path}" : $"Loaded default manifest: {path}");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Saved/default manifest could not be loaded: {ex.Message}");
+        }
+    }
+
+    private async Task LoadManifestAsync(string path, bool persist)
+    {
+        _loadedManifest = await _manifestService.LoadAsync(path);
+        _loadedManifestPath = path;
+        var profile = CardManifestService.ManifestProfile(_loadedManifest);
+        _trustedManifests[profile] = _loadedManifest;
+        _trustedManifestPaths[profile] = path;
+        UpdateManifestSlotDisplay();
+        if (persist)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(ManifestPreferencePath)!);
+            await File.WriteAllTextAsync(ManifestPreferencePath, path);
+            await File.WriteAllTextAsync(ManifestPreferenceFile(profile), path);
+        }
+    }
+
+    private void UpdateManifestSlotDisplay()
+    {
+        SetText("AsmManifestFileText", _trustedManifestPaths.TryGetValue("asm", out var asmPath) ? Path.GetFileName(asmPath) : "Not loaded");
+        SetText("StepperManifestFileText", _trustedManifestPaths.TryGetValue("stepper", out var stepperPath) ? Path.GetFileName(stepperPath) : "Not loaded");
+    }
+
+    private async Task LoadKnownManifestsForConnectedCardsAsync()
+    {
+        foreach (var (profile, identity) in new[] { ("asm", _asmIdentity), ("stepper", GetDetectedStepperIdentity()) })
+        {
+            if (identity is null) continue;
+            if (_trustedManifests.TryGetValue(profile, out var existing) && _manifestService.Validate(identity, existing).IsAuthorized)
+                continue;
+            var databasePath = Path.Combine(CdiStorageService.DefaultDatabaseRoot, identity.SerialNumber, "lic_files", $"{identity.SerialNumber}_manifest.json");
+            if (!File.Exists(databasePath)) continue;
+            try { await LoadManifestAsync(databasePath, persist: true); }
+            catch (Exception ex) { SetStatus($"{profile} manifest auto-load failed: {ex.Message}"); }
+        }
+    }
+
+    private StepperIdentity? GetDetectedStepperIdentity() =>
+        _stepperIdentity is not null && FirmwareTargetProfile.FromSerial(_stepperIdentity.SerialNumber)?.Id == "stepper"
+            ? _stepperIdentity
+            : null;
 
     private async Task PrepareBlankCustomerIdAsync()
     {
@@ -1119,7 +1602,7 @@ public sealed partial class MainWindow : Window
             ApplyStepperIdentity(_stepperIdentity, _customerIdSession.CustomerId, _customerIdSession.SerialNumber);
             _currentCdiPath = await _cdiStorage.SaveToDatabaseAsync(_currentCdi!);
             SetPhaseStatus("Phase3Status", "READY - generate files and stage firmware", "AccentBrush");
-            SerialText.Text = $"SERIAL {_customerIdSession.SerialNumber} (PENDING)";
+            SetCardIdentityHeader(_firmwareTarget.Id, _customerIdSession.SerialNumber, _customerIdSession.CustomerId, pendingFlash: true);
             _assignedIdentityPrepared = false;
             _assignedIdentityVerified = false;
             _publicKeyPrepared = false;
@@ -1139,6 +1622,8 @@ public sealed partial class MainWindow : Window
     {
         var effectiveCustomerId = customerIdOverride ?? identity.CustomerId10;
         var effectiveSerial = serialOverride ?? identity.SerialNumber;
+        var identityProfile = FirmwareTargetProfile.FromSerial(effectiveSerial)?.Id ?? _firmwareTarget.Id;
+        SetCardIdentityHeader(identityProfile, effectiveSerial, effectiveCustomerId, customerIdOverride is not null);
         UpdateCustomerIdStatus(effectiveCustomerId, customerIdOverride is not null);
         _currentCdi = new CardIdentityCdi
         {
@@ -1168,10 +1653,10 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        _stepperIdentity = await _stepperModbus.ReadIdentityAsync();
+        _stepperIdentity = await _stepperModbus.ReadIdentityAsync(_firmwareTarget.Id == "asm" ? _stepperModbus.AsmSlaveId : _stepperModbus.StepperSlaveId);
         ApplyStepperIdentity(_stepperIdentity, _customerIdSession?.CustomerId, _customerIdSession?.SerialNumber);
         if (_deviceProfile == "stepper") await RefreshStepperLiveStatusAsync();
-        SetStatus($"{_firmwareTarget.DisplayName} identity registers refreshed.");
+        SetStatus($"{_firmwareTarget.DisplayName} identity refreshed.");
     }
 
     private async Task SaveCurrentCdiAsync()
@@ -1212,15 +1697,15 @@ public sealed partial class MainWindow : Window
     private bool CanControlStepper()
     {
         if (!_connected || !_stepperModbus.IsConnected) { SetStatus("Stepper control blocked: connect through global Modbus settings first."); return false; }
-        if (_deviceProfile != "stepper") { SetStatus("Stepper control blocked: the connected card is not identified as Stepper."); return false; }
-        if (!_authorized) { SetStatus("Stepper control blocked: verify the board manifest first."); return false; }
+        if (_stepperIdentity is null || FirmwareTargetProfile.FromSerial(_stepperIdentity.SerialNumber)?.Id != "stepper") { SetStatus("Stepper control blocked: no Stepper card was detected at its configured slave ID."); return false; }
+        if (!_stepperAuthorized) { SetStatus("Stepper control blocked: verify a manifest matching the Stepper card."); return false; }
         return true;
     }
 
     private async Task RunStepperCommandAsync(string operation, Func<Task> command)
     {
         if (!CanControlStepper()) return;
-        try { await command(); await RefreshStepperLiveStatusAsync(); SetStatus($"Stepper {operation} accepted; live status refreshed."); }
+        try { await command(); await Task.Delay(80); await RefreshStepperLiveStatusAsync(); SetStatus($"Stepper {operation} accepted and register readback passed."); }
         catch (Exception ex) { SetStatus($"Stepper {operation} failed: {ex.Message}"); }
     }
 
@@ -1241,8 +1726,7 @@ public sealed partial class MainWindow : Window
     private Task JogStepperAsync(bool positive) => RunStepperCommandAsync(positive ? "positive jog" : "negative jog", async () =>
     {
         var chunk = U16(FindNameInPages<NumberBox>("StepperJogChunk"), "jog chunk");
-        var config = await _stepperModbus.ReadStepperConfigurationAsync();
-        await _stepperModbus.WriteStepperConfigurationAsync(config with { JogChunk = chunk });
+        await _stepperModbus.SetStepperJogChunkAsync(chunk);
         await _stepperModbus.JogStepperAsync(positive);
     });
     private Task ResetStepperPositionAsync() => RunStepperCommandAsync("position reset", () => _stepperModbus.ResetStepperPositionAsync());
@@ -1251,7 +1735,7 @@ public sealed partial class MainWindow : Window
     private async Task RefreshStepperDashboardAsync()
     {
         if (!CanControlStepper()) return;
-        try { await RefreshStepperLiveStatusAsync(); SetStatus("Stepper live input, position, command, status and fault registers refreshed."); }
+        try { await RefreshStepperLiveStatusAsync(); SetStatus("Stepper inputs, position, command, status and fault refreshed."); }
         catch (Exception ex) { SetStatus($"Stepper live refresh failed: {ex.Message}"); }
     }
 
@@ -1261,9 +1745,9 @@ public sealed partial class MainWindow : Window
         try
         {
             var config = await _stepperModbus.ReadStepperConfigurationAsync(); ApplyStepperConfiguration(config); await RefreshStepperLiveStatusAsync();
-            SetStatus("Stepper holding registers 6–18 and all live status registers synchronized.");
+            SetStatus("Stepper drive setup and live status synchronized.");
         }
-        catch (Exception ex) { SetStatus($"Stepper register read failed: {ex.Message}"); }
+        catch (Exception ex) { SetStatus($"Stepper setup refresh failed: {ex.Message}"); }
     }
 
     private Task WriteStepperConfigurationAsync() => RunStepperCommandAsync("configuration", async () =>
@@ -1301,8 +1785,8 @@ public sealed partial class MainWindow : Window
     private bool CanControlAsm()
     {
         if (!_connected || !_stepperModbus.IsConnected) { SetStatus("ASM control blocked: connect through the global Modbus settings first."); return false; }
-        if (_deviceProfile != "asm") { SetStatus("ASM control blocked: the connected card is not identified as ASM."); return false; }
-        if (!_authorized) { SetStatus("ASM control blocked: verify the board manifest first."); return false; }
+        if (_asmIdentity is null) { SetStatus("ASM control blocked: no ASM card was detected at its configured slave ID."); return false; }
+        if (!_asmAuthorized) { SetStatus("ASM control blocked: verify a manifest matching the ASM card."); return false; }
         return true;
     }
 
@@ -1316,7 +1800,7 @@ public sealed partial class MainWindow : Window
     private async Task RunAsmCommandAsync(string operation, Func<Task> command)
     {
         if (!CanControlAsm()) return;
-        try { await command(); await RefreshAsmStateAsync(false); SetStatus($"ASM {operation} applied and verified by register readback."); }
+        try { await command(); await RefreshAsmStateAsync(false); SetStatus($"ASM {operation} applied and verified."); }
         catch (Exception ex) { SetStatus($"ASM {operation} failed: {ex.Message}"); }
     }
 
@@ -1326,16 +1810,91 @@ public sealed partial class MainWindow : Window
     private Task ApplyAsmOutputsAsync() => RunAsmCommandAsync("digital outputs",
         () => _stepperModbus.WriteAsmOutputsAsync(FindNameInPages<ToggleSwitch>("AsmBlower")?.IsOn == true, FindNameInPages<ToggleSwitch>("AsmOnboardLed")?.IsOn == true));
 
-    private Task UpdateAsmLedAsync() => RunAsmCommandAsync("selected LED",
-        () => _stepperModbus.UpdateAsmLedAsync(U16(FindNameInPages<NumberBox>("AsmLedAddress"), "LED address"), U16(FindNameInPages<NumberBox>("AsmLedRed"), "red"), U16(FindNameInPages<NumberBox>("AsmLedGreen"), "green"), U16(FindNameInPages<NumberBox>("AsmLedBlue"), "blue")));
+    private async void AsmOutput_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_syncingAsmControls || sender is not ToggleSwitch toggle) return;
+        if (!CanControlAsm())
+        {
+            _syncingAsmControls = true;
+            toggle.IsOn = toggle.Name == "AsmBlower" ? _lastBlowerOn : _lastOnboardLedOn;
+            _syncingAsmControls = false;
+            return;
+        }
+        if (toggle.Name == "AsmBlower") UpdateFanAnimation(toggle.IsOn);
+        await ApplyAsmOutputsAsync();
+    }
 
-    private Task UpdateAllAsmLedsAsync() => RunAsmCommandAsync("all LEDs",
-        () => _stepperModbus.UpdateAllAsmLedsAsync(U16(FindNameInPages<NumberBox>("AsmLedRed"), "red"), U16(FindNameInPages<NumberBox>("AsmLedGreen"), "green"), U16(FindNameInPages<NumberBox>("AsmLedBlue"), "blue")));
+    private Task UpdateAsmLedAsync() => RunAsmCommandAsync("selected LED", () =>
+    {
+        var color = Ws2812Channels(_selectedWs2812Color);
+        return _stepperModbus.UpdateAsmLedAsync(U16(FindNameInPages<NumberBox>("AsmLedAddress"), "LED address"), color.R, color.G, color.B);
+    });
+
+    private Task UpdateAllAsmLedsAsync() => RunAsmCommandAsync("all LEDs", () =>
+    {
+        var color = Ws2812Channels(_selectedWs2812Color);
+        return _stepperModbus.UpdateAllAsmLedsAsync(color.R, color.G, color.B);
+    });
 
     private Task SetAsmBrightnessAsync() => RunAsmCommandAsync("brightness",
         () => _stepperModbus.SetAsmBrightnessAsync(U16(FindNameInPages<NumberBox>("AsmLedBrightness"), "brightness")));
 
     private Task ClearAsmLedsAsync() => RunAsmCommandAsync("LED clear", () => _stepperModbus.ClearAsmLedsAsync());
+
+    private void StartRainbowSweep()
+    {
+        if (!CanControlAsm() || _rainbowCts is not null) return;
+        var intervalBox = FindNameInPages<NumberBox>("AsmRainbowInterval");
+        var interval = intervalBox is null || double.IsNaN(intervalBox.Value) ? 180 : Math.Clamp(intervalBox.Value, 80, 2000);
+        _rainbowCts = new CancellationTokenSource();
+        _ = RunRainbowSweepAsync(TimeSpan.FromMilliseconds(interval), _rainbowCts.Token);
+        SetStatus($"WS2812 rainbow sweep started · 8 LEDs · {interval:0} ms/frame.");
+    }
+
+    private void StopRainbowSweep(bool announce = true)
+    {
+        if (_rainbowCts is null) return;
+        _rainbowCts.Cancel();
+        _rainbowCts.Dispose();
+        _rainbowCts = null;
+        if (announce) SetStatus("WS2812 rainbow sweep stopped.");
+    }
+
+    private async Task RunRainbowSweepAsync(TimeSpan frameInterval, CancellationToken cancellationToken)
+    {
+        var phase = 0;
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                for (ushort address = 0; address < 8; address++)
+                {
+                    var color = RainbowColor((phase + address * 32) & 0xFF);
+                    await _stepperModbus.UpdateAsmLedAsync(address, color.R, color.G, color.B, cancellationToken);
+                }
+                phase = (phase + 8) & 0xFF;
+                await Task.Delay(frameInterval, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _rainbowCts?.Dispose(); _rainbowCts = null;
+            SetStatus($"WS2812 rainbow sweep stopped: {ex.Message}");
+        }
+    }
+
+    private static (ushort R, ushort G, ushort B) RainbowColor(int position)
+    {
+        if (position < 85) return ((ushort)(255 - position * 3), (ushort)(position * 3), 0);
+        if (position < 170)
+        {
+            position -= 85;
+            return (0, (ushort)(255 - position * 3), (ushort)(position * 3));
+        }
+        position -= 170;
+        return ((ushort)(position * 3), 0, (ushort)(255 - position * 3));
+    }
 
     private async Task RefreshAsmStateAsync(bool announce = true)
     {
@@ -1346,20 +1905,23 @@ public sealed partial class MainWindow : Window
             SetText("AsmPwm1Applied", state.Pwm1Applied.ToString()); SetText("AsmPwm2Applied", state.Pwm2Applied.ToString());
             SetText("AsmFrequencyApplied", $"{state.FrequencyAppliedHz} Hz");
             SetText("AsmModbusStatus", state.CommunicationError ? "Error" : "Online");
-            SetText("AsmIp1", state.Ip1Active ? "Active" : "Inactive"); SetText("AsmIp2", state.Ip2Active ? "Active" : "Inactive");
+            SetInputIndicator("AsmIp1", "AsmIp1Dot", state.Ip1Active); SetInputIndicator("AsmIp2", "AsmIp2Dot", state.Ip2Active);
             SetText("AsmWsBusy", state.Ws2812Busy ? "Busy" : "Idle"); SetText("AsmPrescaler", state.Prescaler.ToString()); SetText("AsmClockDivision", state.ClockDivision.ToString());
             SetText("AsmPedals", state.Pedal1Latched || state.Pedal2Latched ? $"{(state.Pedal1Latched ? "P1 " : "")}{(state.Pedal2Latched ? "P2" : "")}".Trim() : "None");
             SetText("AsmFirmware", $"{state.FirmwareMajor}.{state.FirmwareMinor}");
+            _syncingAsmControls = true;
+            _lastBlowerOn = state.BlowerOn; _lastOnboardLedOn = state.OnboardLedOn;
             if (FindNameInPages<ToggleSwitch>("AsmBlower") is { } blower) blower.IsOn = state.BlowerOn;
             if (FindNameInPages<ToggleSwitch>("AsmOnboardLed") is { } led) led.IsOn = state.OnboardLedOn;
+            _syncingAsmControls = false; UpdateFanAnimation(state.BlowerOn);
             SetNumber("AsmPwm1", state.Outputs.Pwm1Duty); SetNumber("AsmPwm2", state.Outputs.Pwm2Duty); SetNumber("AsmFrequency", state.Outputs.FrequencyHz);
-            SetNumber("AsmLedAddress", state.Outputs.LedAddress); SetNumber("AsmLedRed", state.Outputs.Red); SetNumber("AsmLedGreen", state.Outputs.Green); SetNumber("AsmLedBlue", state.Outputs.Blue); SetNumber("AsmLedBrightness", state.Outputs.Brightness);
-            if (announce) SetStatus("ASM input, applied-value, timer and writable holding registers synchronized.");
+            SetNumber("AsmLedAddress", state.Outputs.LedAddress); SetWs2812ColorChannels(state.Outputs.Red, state.Outputs.Green, state.Outputs.Blue); SetNumber("AsmLedBrightness", state.Outputs.Brightness);
+            if (announce) SetStatus("ASM inputs, outputs, timing and diagnostics synchronized.");
         }
         catch (Exception ex)
         {
             if (!announce) throw;
-            SetStatus($"ASM register refresh failed: {ex.Message}");
+            SetStatus($"ASM status refresh failed: {ex.Message}");
         }
     }
 
@@ -1378,11 +1940,11 @@ public sealed partial class MainWindow : Window
         {
             var registers = await _stepperModbus.ReadDriveRegistersAsync();
             await RefreshStepperLiveStatusAsync();
-            SetStatus($"Read holding registers 0..18. Microstep={registers[6]}, PPR={registers[7]}, Accel={registers[8]}, Decel={registers[9]}, Velocity={registers[10]}, Jog={registers[11]}, Status=0x{registers[12]:X4}, Fault={registers[13]}.");
+            SetStatus($"Stepper setup refreshed. Microstep={registers[6]}, PPR={registers[7]}, Accel={registers[8]}, Decel={registers[9]}, Velocity={registers[10]}, Jog={registers[11]}, Status=0x{registers[12]:X4}, Fault={registers[13]}.");
         }
         catch (Exception ex)
         {
-            SetStatus($"Stepper register read failed: {ex.Message}");
+            SetStatus($"Stepper setup refresh failed: {ex.Message}");
         }
     }
 
@@ -1452,11 +2014,13 @@ public sealed partial class MainWindow : Window
 
             if (_stepperModbus.IsConnected) await _stepperModbus.DisconnectAsync();
             _connected = false;
-            _authorized = false;
-            _stepperIdentity = null;
+            _authorized = _asmAuthorized = _stepperAuthorized = false;
+            _asmIdentity = _stepperIdentity = null;
             _currentCdi = null;
             _customerIdSession = null;
-            SerialText.Text = "SERIAL —";
+            StopRainbowSweep(false);
+            _inputPollTimer.Stop();
+            ClearCardIdentityHeaders();
             AuthText.Text = "NOT AUTHORIZED";
             AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(51, 43, 55, 70));
             ConnectionDot.Fill = Brush("WarningBrush");
@@ -1566,8 +2130,7 @@ public sealed partial class MainWindow : Window
             _publicKeyPrepared = await BuildForPhaseAsync("FINAL staged firmware");
             _firmwarePrepared = _publicKeyPrepared;
             _firmwareBuilt = _publicKeyPrepared;
-            _loadedManifestPath = Path.Combine(_generatedPackageFolder, $"{_currentCdi.SerialNumber}_manifest.json");
-            _loadedManifest = await _manifestService.LoadAsync(_loadedManifestPath);
+            await LoadManifestAsync(Path.Combine(_generatedPackageFolder, $"{_currentCdi.SerialNumber}_manifest.json"), persist: true);
 
             SetPhaseStatus("Phase3Status", "COMPLETE - files saved and firmware staged", "SuccessBrush");
             SetPhaseStatus("Phase4Status", "READY - review final flash", "AccentBrush");
@@ -1584,6 +2147,124 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private StepperIdentity? GetActiveFirmwareTargetIdentity(FirmwareTargetProfile? target = null)
+    {
+        target ??= _firmwareTarget;
+        if (target.Id == "asm") return _asmIdentity;
+        return _stepperIdentity is not null &&
+               FirmwareTargetProfile.FromSerial(_stepperIdentity.SerialNumber)?.Id == "stepper"
+            ? _stepperIdentity
+            : null;
+    }
+
+    private async Task<(CardManifest Manifest, string Path)> ResolveMaintenanceManifestAsync(
+        StepperIdentity identity,
+        FirmwareTargetProfile target)
+    {
+        if (_trustedManifests.TryGetValue(target.Id, out var trustedManifest) &&
+            _trustedManifestPaths.TryGetValue(target.Id, out var trustedPath))
+        {
+            var trustedValidation = _manifestService.Validate(identity, trustedManifest);
+            if (trustedValidation.IsAuthorized &&
+                string.Equals(trustedManifest.SerialNumber.Trim(), identity.SerialNumber, StringComparison.OrdinalIgnoreCase))
+                return (trustedManifest, trustedPath);
+        }
+        if (_loadedManifest is not null && !string.IsNullOrWhiteSpace(_loadedManifestPath))
+        {
+            var loadedValidation = _manifestService.Validate(identity, _loadedManifest);
+            if (loadedValidation.IsAuthorized &&
+                string.Equals(_loadedManifest.SerialNumber.Trim(), identity.SerialNumber, StringComparison.OrdinalIgnoreCase))
+                return (_loadedManifest, _loadedManifestPath);
+        }
+
+        var databasePath = Path.Combine(
+            CdiStorageService.DefaultDatabaseRoot,
+            identity.SerialNumber,
+            "lic_files",
+            $"{identity.SerialNumber}_manifest.json");
+        if (!File.Exists(databasePath))
+            throw new FileNotFoundException(
+                "Maintenance reflash requires the existing trusted manifest. Import it in Verify board or restore it to the card's lic_files folder.",
+                databasePath);
+
+        var manifest = await _manifestService.LoadAsync(databasePath);
+        if (!string.Equals(manifest.SerialNumber.Trim(), identity.SerialNumber, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Existing manifest must explicitly contain the connected card's serial number for maintenance reflash.");
+        var validation = _manifestService.Validate(identity, manifest);
+        if (!validation.IsAuthorized)
+            throw new InvalidOperationException($"Existing manifest does not match the connected finalized card: {validation.Reason}");
+        return (manifest, databasePath);
+    }
+
+    private async Task PrepareMaintenanceReflashAsync()
+    {
+        try
+        {
+            var target = _firmwareTarget;
+            var provisioning = new FirmwareProvisioningService(target);
+            var identity = GetActiveFirmwareTargetIdentity(target)
+                ?? throw new InvalidOperationException($"Connect and identify the selected {target.DisplayName} before maintenance reflash.");
+            if (identity.CustomerId10 == "0000000000")
+                throw new InvalidOperationException("Maintenance reflash is only available for finalized cards. Use the default/provisioning workflow for an unprovisioned card.");
+
+            var expectedCdi = new CardIdentityCdi
+            {
+                SerialNumber = identity.SerialNumber,
+                DeviceId = identity.DeviceId96,
+                CustomerId = identity.CustomerId10
+            };
+            SetStatus("Validating finalized firmware headers and existing manifest...");
+            var (manifest, manifestPath) = await ResolveMaintenanceManifestAsync(identity, target);
+            var headers = await provisioning.ValidateCurrentIdentityHeadersAsync(expectedCdi, identity.PublicKeyRawHex);
+            if (!headers.IsValid)
+                throw new InvalidOperationException($"Maintenance reflash blocked: {headers.Reason}. Select the correct finalized firmware source; no identity files were changed.");
+
+            AppendFirmwareLog($"MAINTENANCE: finalized identity and manifest verified for {identity.SerialNumber}.");
+            AppendFirmwareLog("MAINTENANCE: clean-building current source without generating or staging license files...");
+            var build = await provisioning.BuildAsync();
+            AppendFirmwareLog(build.Output);
+            if (!build.Succeeded || !File.Exists(provisioning.ElfPath))
+                throw new InvalidOperationException($"Maintenance build failed with exit code {build.ExitCode}, or the expected ELF was not produced.");
+
+            _maintenanceExpectedCdi = expectedCdi;
+            _maintenanceManifest = manifest;
+            _maintenanceManifestPath = manifestPath;
+            _maintenanceElfSha256 = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(provisioning.ElfPath)));
+            _maintenanceTarget = target;
+            _maintenanceProvisioning = provisioning;
+            _maintenanceReflashRequested = true;
+            _flashDefaultRequested = false;
+            FlashSummaryText.Text =
+                $"MAINTENANCE REFLASH{Environment.NewLine}{Environment.NewLine}" +
+                $"Hardware: {target.DisplayName}{Environment.NewLine}" +
+                $"Serial: {identity.SerialNumber}{Environment.NewLine}" +
+                $"Customer ID: {identity.CustomerId10}{Environment.NewLine}" +
+                $"Manifest: {manifestPath}{Environment.NewLine}" +
+                $"Firmware: {provisioning.ElfPath}{Environment.NewLine}{Environment.NewLine}" +
+                "No CDI, key, manifest, or identity header will be generated or changed.";
+            FlashSerialConfirmation.Header = "Type the existing card serial to confirm";
+            FlashSerialConfirmation.Text = string.Empty;
+            FlashAcknowledge.IsChecked = false;
+            FlashProgressPanel.Visibility = Visibility.Collapsed;
+            FinalFlashButton.IsEnabled = true;
+            PositionFlashSummary();
+            FlashSummaryPopup.IsOpen = true;
+            SetStatus($"Maintenance firmware built for {identity.SerialNumber}. Review and confirm the reflash.");
+        }
+        catch (Exception ex)
+        {
+            _maintenanceReflashRequested = false;
+            _maintenanceExpectedCdi = null;
+            _maintenanceManifest = null;
+            _maintenanceManifestPath = null;
+            _maintenanceElfSha256 = null;
+            _maintenanceTarget = null;
+            _maintenanceProvisioning = null;
+            AppendFirmwareLog($"MAINTENANCE PREPARE BLOCKED: {ex.Message}");
+            SetStatus(ex.Message);
+        }
+    }
+
     private void ShowDefaultFlashSummary()
     {
         if (!_defaultFirmwareBuilt)
@@ -1591,6 +2272,7 @@ public sealed partial class MainWindow : Window
             SetStatus("Prepare default firmware before flashing it.");
             return;
         }
+        _maintenanceReflashRequested = false;
         _flashDefaultRequested = true;
         var modbusIdentity = _stepperModbus.IsConnected && _stepperIdentity is not null
             ? $"Serial {_stepperIdentity.SerialNumber}"
@@ -1612,6 +2294,7 @@ public sealed partial class MainWindow : Window
             SetStatus("Generate the package and stage firmware before final flash.");
             return;
         }
+        _maintenanceReflashRequested = false;
         _flashDefaultRequested = false;
         FlashSummaryText.Text = $"Hardware: {_firmwareTarget.DisplayName}{Environment.NewLine}Serial: {_currentCdi.SerialNumber}{Environment.NewLine}Customer ID: {_currentCdi.CustomerId}{Environment.NewLine}Fingerprint: {_fingerprint}{Environment.NewLine}Package: {_generatedPackageFolder}{Environment.NewLine}Firmware: {_firmwareProvisioning.ElfPath}";
         FlashSerialConfirmation.Header = "Type the assigned serial to confirm";
@@ -1631,6 +2314,13 @@ public sealed partial class MainWindow : Window
         SetFlashProgress(10, "Validating confirmation...");
         try
         {
+            if (_maintenanceReflashRequested)
+            {
+                FlashProgressBar.IsIndeterminate = true;
+                FlashProgressText.Text = "Reflashing finalized firmware, reconnecting, and verifying identity...";
+                await FlashMaintenanceAndVerifyAsync();
+                return;
+            }
             if (_flashDefaultRequested)
             {
                 SetFlashProgress(25, "Probing ST-LINK...");
@@ -1671,6 +2361,149 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private async Task FlashMaintenanceAndVerifyAsync()
+    {
+        if (_maintenanceExpectedCdi is null || _maintenanceManifest is null ||
+            string.IsNullOrWhiteSpace(_maintenanceManifestPath) || string.IsNullOrWhiteSpace(_maintenanceElfSha256) ||
+            _maintenanceTarget is null || _maintenanceProvisioning is null)
+        {
+            SetFlashProgress(0, "Maintenance reflash is not prepared.");
+            SetStatus("Prepare the finalized maintenance firmware again before flashing.");
+            return;
+        }
+        if (FlashAcknowledge.IsChecked != true)
+        {
+            SetFlashProgress(0, "Physical target acknowledgement is required.");
+            SetStatus("Acknowledge the live-device flashing warning before continuing.");
+            return;
+        }
+
+        var confirmation = FlashSerialConfirmation.Text?.Trim() ?? string.Empty;
+        if (!string.Equals(confirmation, _maintenanceExpectedCdi.SerialNumber, StringComparison.Ordinal))
+        {
+            SetFlashProgress(0, $"Type {_maintenanceExpectedCdi.SerialNumber} exactly.");
+            SetStatus($"Type the exact existing serial {_maintenanceExpectedCdi.SerialNumber} to confirm the maintenance target.");
+            return;
+        }
+        if (PortBox.SelectedItem is not SerialPortDescriptor selectedPort)
+        {
+            SetFlashProgress(0, "Select a COM port for post-flash verification.");
+            SetStatus("Select the card COM port before maintenance flashing.");
+            return;
+        }
+
+        var expectedCdi = _maintenanceExpectedCdi;
+        var expectedManifest = _maintenanceManifest;
+        var expectedManifestPath = _maintenanceManifestPath;
+        var target = _maintenanceTarget;
+        var provisioning = _maintenanceProvisioning;
+        var targetProfile = target.Id;
+        var baud = int.Parse(((ComboBoxItem)BaudBox.SelectedItem).Content.ToString()!);
+        var asmSlave = checked((byte)Math.Round(AsmSlaveIdBox.Value));
+        var stepperSlave = checked((byte)Math.Round(StepperSlaveIdBox.Value));
+        try
+        {
+            var activeIdentity = GetActiveFirmwareTargetIdentity(target)
+                ?? throw new InvalidOperationException("The selected finalized card is no longer connected.");
+            RequireAssignedIdentityReadback(activeIdentity, expectedCdi);
+            var currentHeaders = await provisioning.ValidateCurrentIdentityHeadersAsync(expectedCdi, activeIdentity.PublicKeyRawHex);
+            if (!currentHeaders.IsValid)
+                throw new InvalidOperationException($"Firmware identity headers changed after the maintenance build: {currentHeaders.Reason}");
+            var currentElfHash = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(provisioning.ElfPath)));
+            if (!string.Equals(currentElfHash, _maintenanceElfSha256, StringComparison.Ordinal))
+                throw new InvalidOperationException("The built firmware artifact changed after review. Prepare the maintenance reflash again.");
+
+            SetFlashProgress(20, "Disconnecting Modbus and probing ST-LINK...");
+            StopRainbowSweep(false);
+            _inputPollTimer.Stop();
+            if (_stepperModbus.IsConnected) await _stepperModbus.DisconnectAsync();
+            _connected = false;
+            _authorized = _asmAuthorized = _stepperAuthorized = false;
+            ConnectionDot.Fill = Brush("WarningBrush");
+            ConnectionText.Text = "SWD flashing";
+            AuthText.Text = "VERIFY REQUIRED";
+            AppendFirmwareLog($"MAINTENANCE FLASH AUTHORIZED by exact serial {confirmation}.");
+
+            var flash = await provisioning.FlashAsync(confirmation, expectedCdi);
+            AppendFirmwareLog(flash.Output);
+            if (!flash.Succeeded)
+                throw new InvalidOperationException($"STM32CubeProgrammer returned exit code {flash.ExitCode}.");
+
+            SetFlashProgress(75, "Firmware written. Reconnecting to the shared Modbus bus...");
+            await Task.Delay(1500);
+            await _stepperModbus.OpenAsync(selectedPort.PortName, baud);
+            _stepperModbus.AsmSlaveId = asmSlave;
+            _stepperModbus.StepperSlaveId = stepperSlave;
+            var actualAsm = await TryReadIdentityAsync(asmSlave, "asm");
+            var actualStepper = await TryReadIdentityAsync(stepperSlave, "stepper");
+            var targetReadback = targetProfile == "asm" ? actualAsm : actualStepper;
+            if (targetReadback is null)
+                throw new InvalidOperationException($"Flashed {targetProfile.ToUpperInvariant()} card did not return a valid identity on its configured Modbus slave.");
+
+            RequireAssignedIdentityReadback(targetReadback, expectedCdi);
+            var validation = _manifestService.Validate(targetReadback, expectedManifest);
+            if (!validation.IsAuthorized)
+                throw new InvalidOperationException($"Firmware was written, but final manifest verification failed: {validation.Reason}");
+
+            _asmIdentity = actualAsm;
+            _stepperIdentity = actualStepper ?? actualAsm;
+            _deviceProfile = actualAsm is not null && actualStepper is not null
+                ? "both"
+                : actualAsm is not null ? "asm" : "stepper";
+            _loadedManifest = expectedManifest;
+            _loadedManifestPath = expectedManifestPath;
+            _trustedManifests[targetProfile] = expectedManifest;
+            _trustedManifestPaths[targetProfile] = expectedManifestPath;
+            UpdateManifestSlotDisplay();
+            _asmAuthorized = targetProfile == "asm";
+            _stepperAuthorized = targetProfile == "stepper";
+            _connected = true;
+            ApplyStepperIdentity(targetReadback);
+            ClearCardIdentityHeaders();
+            if (actualAsm is not null) SetCardIdentityHeader("asm", actualAsm.SerialNumber, actualAsm.CustomerId10);
+            if (actualStepper is not null) SetCardIdentityHeader("stepper", actualStepper.SerialNumber, actualStepper.CustomerId10);
+            ApplyManifestValidation(validation);
+            _asmAuthorized = targetProfile == "asm";
+            _stepperAuthorized = targetProfile == "stepper";
+            _authorized = true;
+            ConnectionDot.Fill = Brush("SuccessBrush");
+            ConnectionText.Text = "Connected";
+            DisconnectButton.IsEnabled = true;
+            DeviceTypeText.Text = _deviceProfile == "both" ? "ASM + Stepper cards" : target.DisplayName;
+            if (actualAsm is not null) StartInputPolling();
+            AppendFirmwareLog($"MAINTENANCE REFLASH VERIFIED: {targetReadback.SerialNumber}, Customer {targetReadback.CustomerId10}, fingerprint {targetReadback.PublicKeyFingerprintSha256}.");
+            SetFlashProgress(100, "Finalized firmware reflashed and identity verified. License files were unchanged.");
+            SetStatus($"{target.DisplayName} {targetReadback.SerialNumber} reflashed and verified without regenerating license files.");
+        }
+        catch (Exception ex)
+        {
+            if (_stepperModbus.IsConnected) await _stepperModbus.DisconnectAsync();
+            _connected = false;
+            _authorized = _asmAuthorized = _stepperAuthorized = false;
+            _asmIdentity = _stepperIdentity = null;
+            _deviceProfile = "none";
+            ClearCardIdentityHeaders();
+            ConnectionDot.Fill = Brush("ErrorBrush");
+            ConnectionText.Text = "Disconnected";
+            DisconnectButton.IsEnabled = false;
+            AuthText.Text = "VERIFY REQUIRED";
+            AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(48, 255, 107, 107));
+            AppendFirmwareLog($"MAINTENANCE FLASH/VERIFY FAILED: {ex.Message}");
+            SetFlashProgress(0, "Maintenance flash or verification failed. Reconnect and inspect status.");
+            SetStatus($"Maintenance reflash failed: {ex.Message}");
+        }
+        finally
+        {
+            _maintenanceReflashRequested = false;
+            _maintenanceExpectedCdi = null;
+            _maintenanceManifest = null;
+            _maintenanceManifestPath = null;
+            _maintenanceElfSha256 = null;
+            _maintenanceTarget = null;
+            _maintenanceProvisioning = null;
+        }
+    }
+
     private void SetFlashProgress(double value, string message)
     {
         FlashProgressPanel.Visibility = Visibility.Visible;
@@ -1678,7 +2511,17 @@ public sealed partial class MainWindow : Window
         FlashProgressText.Text = message;
     }
 
-    private void CloseFlashSummary_Click(object sender, RoutedEventArgs e) => FlashSummaryPopup.IsOpen = false;
+    private void CloseFlashSummary_Click(object sender, RoutedEventArgs e)
+    {
+        FlashSummaryPopup.IsOpen = false;
+        _maintenanceReflashRequested = false;
+        _maintenanceExpectedCdi = null;
+        _maintenanceManifest = null;
+        _maintenanceManifestPath = null;
+        _maintenanceElfSha256 = null;
+        _maintenanceTarget = null;
+        _maintenanceProvisioning = null;
+    }
 
     private void PositionFlashSummary()
     {
@@ -1745,7 +2588,8 @@ public sealed partial class MainWindow : Window
         try
         {
             var expected = _currentCdi;
-            var readback = await _stepperModbus.ReadIdentityAsync();
+            var readback = await _stepperModbus.ReadIdentityAsync(
+                _firmwareTarget.Id == "asm" ? _stepperModbus.AsmSlaveId : _stepperModbus.StepperSlaveId);
             RequireAssignedIdentityReadback(readback, expected);
             var manifestPath = Path.Combine(CdiStorageService.DefaultDatabaseRoot, expected.SerialNumber, "lic_files", $"{expected.SerialNumber}_manifest.json");
             var manifest = await _manifestService.LoadAsync(manifestPath);
@@ -1811,7 +2655,7 @@ public sealed partial class MainWindow : Window
         if (PortBox.SelectedItem is not SerialPortDescriptor selectedPort) throw new InvalidOperationException("Select the card COM port for post-flash verification.");
         if (!await ProbeForPhaseAsync(phase)) throw new InvalidOperationException("ST-LINK target detection failed.");
         var baud = int.Parse(((ComboBoxItem)BaudBox.SelectedItem).Content.ToString()!);
-        var slave = checked((byte)Math.Round(SlaveIdBox.Value));
+        var slave = checked((byte)Math.Round(_firmwareTarget.Id == "asm" ? AsmSlaveIdBox.Value : StepperSlaveIdBox.Value));
         AppendFirmwareLog($"{phase}: disconnecting Modbus and flashing confirmed target {confirmationSerial}...");
         await _stepperModbus.DisconnectAsync();
         _connected = false;
@@ -1947,7 +2791,7 @@ public sealed partial class MainWindow : Window
         }
 
         var baud = int.Parse(((ComboBoxItem)BaudBox.SelectedItem).Content.ToString()!);
-        var slave = checked((byte)Math.Round(SlaveIdBox.Value));
+        var slave = checked((byte)Math.Round(_firmwareTarget.Id == "asm" ? AsmSlaveIdBox.Value : StepperSlaveIdBox.Value));
         var expectedCdi = _currentCdi;
         try
         {

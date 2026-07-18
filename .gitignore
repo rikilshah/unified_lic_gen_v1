@@ -23,6 +23,7 @@ AppPackages/
 BundleArtifacts/
 
 # Logs, dumps, and local reports
+.gstack/
 *.log
 *.dmp
 *.tmp

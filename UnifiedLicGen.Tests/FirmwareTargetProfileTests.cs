@@ -24,4 +24,22 @@ public sealed class FirmwareTargetProfileTests
     {
         Assert.Null(FirmwareTargetProfile.FromSerial(serial));
     }
+
+    [Theory]
+    [InlineData("asm", true, true, "asm")]
+    [InlineData("stepper", true, true, "stepper")]
+    [InlineData("stepper", true, false, "asm")]
+    [InlineData("asm", false, true, "stepper")]
+    public void ResolveConnectedTarget_PreservesSelectionWhenBothCardsAreOnline(
+        string selectedProfile,
+        bool asmDetected,
+        bool stepperDetected,
+        string expectedProfile)
+    {
+        var selected = FirmwareTargetProfile.FromId(selectedProfile);
+
+        var resolved = FirmwareTargetProfile.ResolveConnectedTarget(selected, asmDetected, stepperDetected);
+
+        Assert.Equal(expectedProfile, resolved.Id);
+    }
 }

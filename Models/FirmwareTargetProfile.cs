@@ -26,6 +26,18 @@ public sealed record FirmwareTargetProfile(
     public static FirmwareTargetProfile FromId(string id) =>
         string.Equals(id, Asm.Id, StringComparison.OrdinalIgnoreCase) ? Asm : Stepper;
 
+    public static FirmwareTargetProfile ResolveConnectedTarget(
+        FirmwareTargetProfile selected,
+        bool asmDetected,
+        bool stepperDetected)
+    {
+        ArgumentNullException.ThrowIfNull(selected);
+        if (asmDetected && stepperDetected) return selected;
+        if (asmDetected) return Asm;
+        if (stepperDetected) return Stepper;
+        throw new InvalidOperationException("No supported card was detected.");
+    }
+
     public static FirmwareTargetProfile? FromSerial(string? serialNumber)
     {
         var serial = serialNumber?.Trim().ToUpperInvariant();

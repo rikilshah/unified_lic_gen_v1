@@ -3,6 +3,16 @@ using UnifiedLicGen.Models;
 
 namespace UnifiedLicGen.Services;
 
+public sealed record ConnectedCardAuthorization(
+    ManifestValidationResult? Asm,
+    ManifestValidationResult? Stepper)
+{
+    public bool AsmAuthorized => Asm?.IsAuthorized == true;
+    public bool StepperAuthorized => Stepper?.IsAuthorized == true;
+    public bool AnyAuthorized => AsmAuthorized || StepperAuthorized;
+    public int AuthorizedCount => (AsmAuthorized ? 1 : 0) + (StepperAuthorized ? 1 : 0);
+}
+
 public sealed class CardManifestService
 {
     private static readonly JsonSerializerOptions Options = new()
@@ -64,6 +74,21 @@ public sealed class CardManifestService
             fingerprintValid, firmwareValid, failures.Count == 0 ? "Manifest verified." : string.Join("; ", failures) + ".");
     }
 
+    public ConnectedCardAuthorization ValidateConnectedCards(
+        StepperIdentity? asmCard,
+        CardManifest? asmManifest,
+        StepperIdentity? stepperCard,
+        CardManifest? stepperManifest) => new(
+            asmCard is null || asmManifest is null ? null : Validate(asmCard, asmManifest),
+            stepperCard is null || stepperManifest is null ? null : Validate(stepperCard, stepperManifest));
+
+    public static string ManifestProfile(CardManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        var profile = FirmwareTargetProfile.FromSerial(manifest.SerialNumber)?.Id;
+        return profile ?? throw new InvalidDataException("Manifest serial must identify an ASM (A...) or Stepper (S...) card.");
+    }
+
     private static string FirstString(JsonElement root, string current, params string[] names)
     {
         if (!string.IsNullOrWhiteSpace(current)) return current;
@@ -80,4 +105,3 @@ public sealed class CardManifestService
         .Where(c => !char.IsWhiteSpace(c) && c is not '_' and not '-' and not ':' and not ',')
         .Select(char.ToUpperInvariant).ToArray());
 }
-

@@ -24,9 +24,25 @@ The status bar reports failures while the floating flash window shows the curren
 
 The operator-facing UI shows one wizard step at a time. During final programming, the floating review window visually reports confirmation, ST-LINK probing, programming/reconnect, and verification instead of exposing a persistent main-page log.
 
-The four phases and hardware control/test workspaces share one sidebar shell and one global Modbus session. Flash reconnect uses the same COM port, baud, and slave ID selected for control and testing.
+The four phases and hardware control/test workspaces share one sidebar shell and one global Modbus session. The session defaults to ASM slave `1` and Stepper slave `2`, and can identify both on the same COM port. Flash reconnect uses the same COM port and baud plus the configured slave ID for the active firmware target.
 
 Customer ID generation and recovery are specified in [CUSTOMER_ID_PROVISIONING_SOP.md](CUSTOMER_ID_PROVISIONING_SOP.md).
+
+## Finalized-card Maintenance Reflash
+
+Use **Target > Reflash finalized firmware** when a card already contains its final serial number, 10-digit Customer ID, and public key and only the application firmware needs to be rebuilt and programmed again.
+
+This path is deliberately separate from the four provisioning phases. It performs only these operations:
+
+1. read the selected connected card's final identity;
+2. load an already-existing trusted manifest, either the currently imported matching manifest or `PCB_LIC_DB\<serial>\lic_files\<serial>_manifest.json`;
+3. require the manifest to explicitly name and fully authorize that card;
+4. compare the live serial, Customer ID, and 64-byte public key with the selected firmware source's three identity headers;
+5. clean-build the selected firmware source without staging any files;
+6. record the built ELF hash, show the floating review dialog, and require acknowledgement plus the exact existing serial;
+7. recheck the headers and ELF hash, flash through ST-LINK, reopen the shared Modbus session, and verify the complete identity against the same manifest.
+
+The maintenance path never calls CDI storage, Customer ID generation, key generation, manifest export, or identity-header preparation. It does not create or modify license files. If the connected card reports Customer ID `0000000000`, use the normal blank-card workflow instead.
 
 ## Files and Tools
 
@@ -59,6 +75,7 @@ Defaults:
 - The operator-assigned serial and generated Customer ID are persisted before header modification and cannot be silently replaced after flashing begins.
 - A second serial assignment for the same MCU UID and hardware profile is rejected.
 - The firmware target cannot be changed away from the connected hardware profile.
+- Maintenance reflash is fail-closed if the selected card is unprovisioned; the existing manifest is absent or mismatched; source identity headers differ from the card; or the reviewed ELF changes before programming.
 
 ## Failure Recovery
 
@@ -74,7 +91,7 @@ Defaults:
 Verification was performed without programming a physical board:
 
 - Unified dashboard build: successful with zero warnings and errors.
-- Automated tests: 25 passed.
+- Automated tests: 42 passed, including exact finalized identity-header validation and WS2812 picker-to-register RGB mapping.
 - Stepper clean MinSizeRel build from `main`: 24,180 bytes flash (73.79%), 3,448 bytes RAM (84.18%).
 - ASM clean Release build from `main`: 14,180 bytes flash (43.27%), 1,696 bytes RAM (41.41%).
 - ST-LINK: STM32F03x detected at 3.27 V.

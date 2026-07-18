@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using UnifiedLicGen.Models;
 
 namespace UnifiedLicGen.Services;
@@ -112,6 +113,43 @@ public sealed class FirmwareProvisioningService
         var build = await RunAsync(
             _cmakePath, ["--build", "--preset", _buildPreset, "--clean-first"], _firmwareRoot, TimeSpan.FromMinutes(3), cancellationToken).ConfigureAwait(false);
         return new ExternalCommandResult(build.ExitCode, configure.Output + Environment.NewLine + build.Output);
+    }
+
+    public async Task<FirmwareIdentityHeaderValidation> ValidateCurrentIdentityHeadersAsync(
+        CardIdentityCdi cdi,
+        string rawPublicKeyHex,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(cdi);
+        var normalizedKey = new string((rawPublicKeyHex ?? string.Empty).Where(Uri.IsHexDigit).ToArray()).ToUpperInvariant();
+        if (normalizedKey.Length != 128)
+            return new FirmwareIdentityHeaderValidation(false, false, false, "Live public key must contain exactly 64 bytes before maintenance reflash.");
+
+        var include = Path.Combine(_firmwareRoot, "Core", "Inc");
+        var serialPath = Path.Combine(include, "serial_number_config.h");
+        var customerPath = Path.Combine(include, "customer_id_config.h");
+        var publicKeyPath = Path.Combine(include, "card_public_key.h");
+        foreach (var path in new[] { serialPath, customerPath, publicKeyPath })
+            if (!File.Exists(path))
+                return new FirmwareIdentityHeaderValidation(false, false, false, $"Required finalized identity header is missing: {path}");
+
+        var serialHeader = await File.ReadAllTextAsync(serialPath, cancellationToken).ConfigureAwait(false);
+        var customerHeader = await File.ReadAllTextAsync(customerPath, cancellationToken).ConfigureAwait(false);
+        var publicKeyHeader = await File.ReadAllTextAsync(publicKeyPath, cancellationToken).ConfigureAwait(false);
+        var serialMatches = Regex.IsMatch(serialHeader, $"#define\\s+APP_SERIAL_NUMBER_TEXT\\s+\"{Regex.Escape(cdi.SerialNumber)}\"");
+        var customerMatches = Regex.IsMatch(customerHeader, $"#define\\s+APP_CUST_ID_TEXT\\s+\"{Regex.Escape(cdi.CustomerId)}\"");
+        var publicKeyMatches = Enumerable.Range(0, 32).All(index =>
+        {
+            var word = normalizedKey.Substring(index * 4, 4);
+            return Regex.IsMatch(publicKeyHeader, $@"#define\s+DEVICE_PUBKEY_WORD{index:00}\s+0x{word}U\b", RegexOptions.IgnoreCase);
+        });
+
+        var failures = new List<string>(3);
+        if (!serialMatches) failures.Add("firmware serial header does not match the connected card");
+        if (!customerMatches) failures.Add("firmware Customer ID header does not match the connected card");
+        if (!publicKeyMatches) failures.Add("firmware public-key header does not match the connected card");
+        return new FirmwareIdentityHeaderValidation(serialMatches, customerMatches, publicKeyMatches,
+            failures.Count == 0 ? "All finalized identity headers match the connected card." : string.Join("; ", failures));
     }
 
     public async Task<ExternalCommandResult> ProbeStLinkAsync(CancellationToken cancellationToken = default)

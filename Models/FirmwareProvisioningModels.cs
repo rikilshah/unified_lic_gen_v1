@@ -11,3 +11,11 @@ public sealed record ExternalCommandResult(int ExitCode, string Output)
     public bool Succeeded => ExitCode == 0;
 }
 
+public sealed record FirmwareIdentityHeaderValidation(
+    bool SerialMatches,
+    bool CustomerIdMatches,
+    bool PublicKeyMatches,
+    string Reason)
+{
+    public bool IsValid => SerialMatches && CustomerIdMatches && PublicKeyMatches;
+}

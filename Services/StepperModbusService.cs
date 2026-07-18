@@ -46,7 +46,40 @@ public sealed class StepperModbusService : IDisposable
     private IModbusSerialMaster? _master;
     private byte _slaveId;
 
+    public byte AsmSlaveId { get; set; } = 1;
+    public byte StepperSlaveId { get; set; } = 2;
+
     public bool IsConnected => _port?.IsOpen == true && _master is not null;
+
+    public async Task OpenAsync(string portName, int baudRate, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            DisconnectCore();
+            var port = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One)
+            {
+                Handshake = Handshake.None,
+                ReadTimeout = 600,
+                WriteTimeout = 600,
+                DtrEnable = true,
+                RtsEnable = true
+            };
+            port.Open();
+            var master = _factory.CreateRtuMaster(new SerialPortAdapter(port));
+            master.Transport.ReadTimeout = 600;
+            master.Transport.WriteTimeout = 600;
+            master.Transport.Retries = 1;
+            _port = port;
+            _master = master;
+        }
+        catch
+        {
+            DisconnectCore();
+            throw;
+        }
+        finally { _gate.Release(); }
+    }
 
     public async Task<StepperIdentity> ConnectAndReadIdentityAsync(
         string portName,
@@ -105,9 +138,9 @@ public sealed class StepperModbusService : IDisposable
             var master = _master ?? throw new InvalidOperationException("Stepper Modbus connection is not open.");
             return await Task.Run(() =>
             {
-                var inputs = master.ReadInputRegisters(_slaveId, RuntimeInputStart, RuntimeInputCount);
-                var holding = master.ReadHoldingRegisters(_slaveId, RuntimeHoldingStart, RuntimeHoldingCount);
-                var discrete = master.ReadInputs(_slaveId, 0, 4);
+                var inputs = master.ReadInputRegisters(StepperSlaveId, RuntimeInputStart, RuntimeInputCount);
+                var holding = master.ReadHoldingRegisters(StepperSlaveId, RuntimeHoldingStart, RuntimeHoldingCount);
+                var discrete = master.ReadInputs(StepperSlaveId, 0, 4);
                 return new StepperLiveStatus(
                     Combine(inputs[0], inputs[1]),
                     unchecked((int)Combine(inputs[2], inputs[3])),
@@ -125,17 +158,20 @@ public sealed class StepperModbusService : IDisposable
         }
     }
 
-    public async Task<StepperIdentity> ReadIdentityAsync(CancellationToken cancellationToken = default)
+    public Task<StepperIdentity> ReadIdentityAsync(CancellationToken cancellationToken = default) =>
+        ReadIdentityAsync(_slaveId, cancellationToken);
+
+    public async Task<StepperIdentity> ReadIdentityAsync(byte slaveId, CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var master = _master ?? throw new InvalidOperationException("Stepper Modbus connection is not open.");
             var identity = await Task.Run(
-                () => master.ReadInputRegisters(_slaveId, IdentityStart, IdentityCount),
+                () => master.ReadInputRegisters(slaveId, IdentityStart, IdentityCount),
                 cancellationToken).ConfigureAwait(false);
             var metadata = await Task.Run(
-                () => master.ReadInputRegisters(_slaveId, MetadataStart, MetadataCount),
+                () => master.ReadInputRegisters(slaveId, MetadataStart, MetadataCount),
                 cancellationToken).ConfigureAwait(false);
             return StepperIdentity.Decode(identity, metadata);
         }
@@ -152,7 +188,7 @@ public sealed class StepperModbusService : IDisposable
         {
             var master = _master ?? throw new InvalidOperationException("Stepper Modbus connection is not open.");
             return await Task.Run(
-                () => master.ReadHoldingRegisters(_slaveId, 0, 19),
+                () => master.ReadHoldingRegisters(StepperSlaveId, 0, 19),
                 cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -171,30 +207,39 @@ public sealed class StepperModbusService : IDisposable
         ExecuteAsync(master =>
         {
             EnsureStepperIdle(master, "configuration write");
-            master.WriteMultipleRegisters(_slaveId, StepperConfigStart,
-                new[] { config.Microstep, config.PulsesPerRevolution, config.Acceleration, config.Deceleration, config.Velocity, config.JogChunk });
-            master.WriteMultipleRegisters(_slaveId, StepperAdvancedConfigStart,
-                new[] { (ushort)(config.ConfigBits & 0x000F), config.HomeChunk, config.DeadbandChunk, config.HomingSpeed, config.DeadbandSpeed });
+            WriteAndVerifyRegisters(master, StepperConfigStart,
+                new[] { config.Microstep, config.PulsesPerRevolution, config.Acceleration, config.Deceleration, config.Velocity, config.JogChunk }, "drive setup");
+            WriteAndVerifyRegisters(master, StepperAdvancedConfigStart,
+                new[] { (ushort)(config.ConfigBits & 0x000F), config.HomeChunk, config.DeadbandChunk, config.HomingSpeed, config.DeadbandSpeed }, "advanced drive setup");
+        }, cancellationToken);
+
+    public Task SetStepperJogChunkAsync(ushort jogChunk, CancellationToken cancellationToken = default) =>
+        ExecuteAsync(master =>
+        {
+            EnsureStepperIdle(master, "jog chunk write");
+            WriteAndVerifyRegisters(master, 11, new[] { jogChunk }, "jog chunk");
         }, cancellationToken);
 
     public Task MoveStepperRelativeAsync(int pulses, CancellationToken cancellationToken = default) => ExecuteAsync(master =>
     {
         EnsureStepperIdle(master, "relative move"); Split(unchecked((uint)pulses), out var low, out var high);
-        master.WriteSingleRegister(_slaveId, StepperMode, 0); master.WriteMultipleRegisters(_slaveId, StepperRelativeTarget, new[] { low, high });
-        master.WriteSingleRegister(_slaveId, StepperControl, StepperControlTrigger);
+        WriteAndVerifyRegisters(master, StepperMode, new ushort[] { 0 }, "relative mode");
+        WriteAndVerifyRegisters(master, StepperRelativeTarget, new[] { low, high }, "relative target");
+        master.WriteSingleRegister(StepperSlaveId, StepperControl, StepperControlTrigger);
     }, cancellationToken);
 
     public Task MoveStepperAbsoluteAsync(uint pulses, CancellationToken cancellationToken = default) => ExecuteAsync(master =>
     {
         EnsureStepperIdle(master, "absolute move"); Split(pulses, out var low, out var high);
-        master.WriteSingleRegister(_slaveId, StepperMode, 1); master.WriteMultipleRegisters(_slaveId, StepperAbsoluteTarget, new[] { low, high });
-        master.WriteSingleRegister(_slaveId, StepperControl, StepperControlTrigger);
+        WriteAndVerifyRegisters(master, StepperMode, new ushort[] { 1 }, "absolute mode");
+        WriteAndVerifyRegisters(master, StepperAbsoluteTarget, new[] { low, high }, "absolute target");
+        master.WriteSingleRegister(StepperSlaveId, StepperControl, StepperControlTrigger);
     }, cancellationToken);
 
     public Task JogStepperAsync(bool positive, CancellationToken cancellationToken = default) => ExecuteAsync(master =>
     {
         EnsureStepperIdle(master, positive ? "positive jog" : "negative jog");
-        master.WriteSingleRegister(_slaveId, StepperControl, positive ? StepperControlJogPositive : StepperControlJogNegative);
+        master.WriteSingleRegister(StepperSlaveId, StepperControl, positive ? StepperControlJogPositive : StepperControlJogNegative);
     }, cancellationToken);
 
     public Task ResetStepperPositionAsync(CancellationToken cancellationToken = default) => StepperCommandAsync(StepperControlHomeReset, "position reset", cancellationToken);
@@ -208,10 +253,10 @@ public sealed class StepperModbusService : IDisposable
             var master = RequireMaster();
             return await Task.Run(() =>
             {
-                var inputs = master.ReadInputRegisters(_slaveId, 0, 4);
-                var timer = master.ReadInputRegisters(_slaveId, 50, 2);
-                var holding = master.ReadHoldingRegisters(_slaveId, 0, 13);
-                var pedals = master.ReadCoils(_slaveId, 0, 2);
+                var inputs = master.ReadInputRegisters(AsmSlaveId, 0, 4);
+                var timer = master.ReadInputRegisters(AsmSlaveId, 50, 2);
+                var holding = master.ReadHoldingRegisters(AsmSlaveId, 0, 13);
+                var pedals = master.ReadCoils(AsmSlaveId, 0, 2);
                 var outputs = DecodeAsmOutputs(holding.Skip(AsmHoldingPwmStart).Take(AsmHoldingPwmCount).ToArray());
                 return new AsmLiveState(inputs[0], inputs[1], inputs[2], inputs[3], timer[0], timer[1],
                     pedals.ElementAtOrDefault(0), pedals.ElementAtOrDefault(1), holding[11], holding[12], outputs);
@@ -223,14 +268,25 @@ public sealed class StepperModbusService : IDisposable
         }
     }
 
+    public async Task<ushort> ReadAsmInputStatusAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var master = RequireMaster();
+            return await Task.Run(() => master.ReadInputRegisters(AsmSlaveId, 0, 1)[0], cancellationToken).ConfigureAwait(false);
+        }
+        finally { _gate.Release(); }
+    }
+
     public Task WriteAsmPwmAsync(ushort pwm1, ushort pwm2, ushort frequencyHz, CancellationToken cancellationToken = default)
     {
         if (pwm1 > 1023 || pwm2 > 1023) throw new ArgumentOutOfRangeException(nameof(pwm1), "PWM duty must be 0..1023.");
         if (frequencyHz is < 1 or > 11718) throw new ArgumentOutOfRangeException(nameof(frequencyHz), "PWM frequency must be 1..11718 Hz.");
         return ExecuteAsync(master =>
         {
-            master.WriteMultipleRegisters(_slaveId, AsmHoldingPwmStart, new[] { pwm1, pwm2 });
-            master.WriteSingleRegister(_slaveId, AsmHoldingFrequency, frequencyHz);
+            master.WriteMultipleRegisters(AsmSlaveId, AsmHoldingPwmStart, new[] { pwm1, pwm2 });
+            master.WriteSingleRegister(AsmSlaveId, AsmHoldingFrequency, frequencyHz);
         }, cancellationToken);
     }
 
@@ -240,13 +296,13 @@ public sealed class StepperModbusService : IDisposable
             var control = ReadAsmPersistentControl(master);
             control = blowerOn ? (ushort)(control | AsmControlBlower) : (ushort)(control & ~AsmControlBlower);
             control = onboardLedOn ? (ushort)(control | AsmControlOnboardLed) : (ushort)(control & ~AsmControlOnboardLed);
-            master.WriteSingleRegister(_slaveId, AsmHoldingControl, control);
+            master.WriteSingleRegister(AsmSlaveId, AsmHoldingControl, control);
         }, cancellationToken);
 
     public Task UpdateAsmLedAsync(ushort address, ushort red, ushort green, ushort blue, CancellationToken cancellationToken = default)
     {
         ValidateAsmLed(address, red, green, blue);
-        return ExecuteAsync(master => master.WriteMultipleRegisters(_slaveId, AsmHoldingControl,
+        return ExecuteAsync(master => master.WriteMultipleRegisters(AsmSlaveId, AsmHoldingControl,
             new[] { (ushort)(ReadAsmPersistentControl(master) | AsmControlLedUpdate), address, red, green, blue }), cancellationToken);
     }
 
@@ -260,11 +316,11 @@ public sealed class StepperModbusService : IDisposable
     public Task SetAsmBrightnessAsync(ushort brightness, CancellationToken cancellationToken = default)
     {
         if (brightness > 255) throw new ArgumentOutOfRangeException(nameof(brightness), "Brightness must be 0..255.");
-        return ExecuteAsync(master => master.WriteSingleRegister(_slaveId, AsmHoldingLedBrightness, brightness), cancellationToken);
+        return ExecuteAsync(master => master.WriteSingleRegister(AsmSlaveId, AsmHoldingLedBrightness, brightness), cancellationToken);
     }
 
     public Task ClearAsmLedsAsync(CancellationToken cancellationToken = default) =>
-        ExecuteAsync(master => master.WriteSingleRegister(_slaveId, AsmHoldingControl,
+        ExecuteAsync(master => master.WriteSingleRegister(AsmSlaveId, AsmHoldingControl,
             (ushort)(ReadAsmPersistentControl(master) | AsmControlLedClear)), cancellationToken);
 
     public async Task DisconnectAsync()
@@ -314,7 +370,7 @@ public sealed class StepperModbusService : IDisposable
     }
 
     private ushort ReadAsmPersistentControl(IModbusSerialMaster master) =>
-        (ushort)(master.ReadHoldingRegisters(_slaveId, AsmHoldingControl, 1)[0] & AsmPersistentControlMask);
+        (ushort)(master.ReadHoldingRegisters(AsmSlaveId, AsmHoldingControl, 1)[0] & AsmPersistentControlMask);
 
     private static AsmOutputState DecodeAsmOutputs(ushort[] r)
     {
@@ -329,12 +385,21 @@ public sealed class StepperModbusService : IDisposable
     }
 
     private Task StepperCommandAsync(ushort command, string name, CancellationToken cancellationToken) => ExecuteAsync(master =>
-    { EnsureStepperIdle(master, name); master.WriteSingleRegister(_slaveId, StepperControl, command); }, cancellationToken);
+    { EnsureStepperIdle(master, name); master.WriteSingleRegister(StepperSlaveId, StepperControl, command); }, cancellationToken);
 
     private void EnsureStepperIdle(IModbusSerialMaster master, string operation)
     {
-        var status = master.ReadHoldingRegisters(_slaveId, StepperStatus, 1)[0];
+        var status = master.ReadHoldingRegisters(StepperSlaveId, StepperStatus, 1)[0];
         if ((status & StepperBusyMask) != 0) throw new InvalidOperationException($"Drive is busy; refused {operation}. Status=0x{status:X4}.");
+    }
+
+    private void WriteAndVerifyRegisters(IModbusSerialMaster master, ushort start, ushort[] values, string operation)
+    {
+        if (values.Length == 1) master.WriteSingleRegister(StepperSlaveId, start, values[0]);
+        else master.WriteMultipleRegisters(StepperSlaveId, start, values);
+        var readback = master.ReadHoldingRegisters(StepperSlaveId, start, (ushort)values.Length);
+        if (!readback.SequenceEqual(values))
+            throw new IOException($"Stepper {operation} register readback mismatch at HR {start}.");
     }
 
     private static void Split(uint value, out ushort low, out ushort high)

@@ -50,6 +50,38 @@ public sealed class FirmwareProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ValidateCurrentIdentityHeadersAsync_RequiresExactFinalizedIdentityWithoutWritingFiles()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"UnifiedLicGen-Reflash-{Guid.NewGuid():N}");
+        var include = Path.Combine(root, "Core", "Inc");
+        Directory.CreateDirectory(include);
+        var rawKey = string.Concat(Enumerable.Range(0, 32).Select(index => index.ToString("X4")));
+        var keyHeader = string.Join(Environment.NewLine, Enumerable.Range(0, 32)
+            .Select(index => $"#define DEVICE_PUBKEY_WORD{index:00} 0x{index:X4}U"));
+        await File.WriteAllTextAsync(Path.Combine(include, "card_public_key.h"), keyHeader);
+        await File.WriteAllTextAsync(Path.Combine(include, "customer_id_config.h"), "#define APP_CUST_ID_TEXT \"3792822696\"");
+        await File.WriteAllTextAsync(Path.Combine(include, "serial_number_config.h"), "#define APP_SERIAL_NUMBER_TEXT \"S26050606\"");
+
+        try
+        {
+            var cdi = new CardIdentityCdi { SerialNumber = "S26050606", DeviceId = "003B00214830530720383253", CustomerId = "3792822696" };
+            var service = new FirmwareProvisioningService(root, "missing-cmake", "missing-programmer");
+
+            var valid = await service.ValidateCurrentIdentityHeadersAsync(cdi, rawKey);
+            var invalid = await service.ValidateCurrentIdentityHeadersAsync(cdi with { CustomerId = "0000000001" }, rawKey);
+
+            Assert.True(valid.IsValid, valid.Reason);
+            Assert.False(invalid.IsValid);
+            Assert.False(invalid.CustomerIdMatches);
+            Assert.Contains("Customer ID", invalid.Reason);
+        }
+        finally
+        {
+            DeleteTestDirectory(root);
+        }
+    }
+
+    [Fact]
     public async Task RepositoryDefaultAndAssignedIdentityStages_KeepPublicKeyPhasesSeparate()
     {
         var root = Path.Combine(Path.GetTempPath(), $"UnifiedLicGen-Firmware-{Guid.NewGuid():N}");
