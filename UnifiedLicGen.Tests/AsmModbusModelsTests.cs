@@ -1,4 +1,5 @@
 using UnifiedLicGen.Models;
+using UnifiedLicGen.Services;
 using Xunit;
 
 namespace UnifiedLicGen.Tests;
@@ -12,7 +13,7 @@ public sealed class AsmModbusModelsTests
         var state = new AsmLiveState(0x003F, 10, 20, 1000, 63, 1, true, true, 2, 4, outputs);
 
         Assert.True(state.BlowerOn);
-        Assert.True(state.OnboardLedOn);
+        Assert.True(state.CommunicationHeartbeatOn);
         Assert.True(state.Ws2812Busy);
         Assert.True(state.Ip1Active);
         Assert.True(state.Ip2Active);
@@ -26,10 +27,28 @@ public sealed class AsmModbusModelsTests
             new AsmOutputState(0, 0, 0, 0, 0, 0, 0, 0, 1000));
 
         Assert.False(state.BlowerOn);
-        Assert.False(state.OnboardLedOn);
+        Assert.False(state.CommunicationHeartbeatOn);
         Assert.False(state.Ws2812Busy);
         Assert.False(state.Ip1Active);
         Assert.False(state.Ip2Active);
         Assert.False(state.CommunicationError);
+    }
+
+    [Theory]
+    [InlineData(0x000F, true, 0x0001)]
+    [InlineData(0x000F, false, 0x0000)]
+    [InlineData(0x0002, false, 0x0000)]
+    public void PersistentControl_DropsHeartbeatAndCommandBits(ushort currentControl, bool blowerOn, ushort expected)
+    {
+        Assert.Equal(expected, StepperModbusService.ComposeAsmPersistentControl(currentControl, blowerOn));
+    }
+
+    [Theory]
+    [InlineData(0x0000, 0x0004)]
+    [InlineData(0x000F, 0x0005)]
+    [InlineData(0x0002, 0x0004)]
+    public void BrightnessRefreshControl_PreservesOnlyBlowerAndRequestsImmediateRedraw(ushort currentControl, ushort expected)
+    {
+        Assert.Equal(expected, StepperModbusService.ComposeAsmBrightnessRefreshControl(currentControl));
     }
 }

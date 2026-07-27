@@ -11,6 +11,7 @@
                     </VisualState.StateTriggers>
                     <VisualState.Setters>
                         <Setter Target="Navigation.PaneDisplayMode" Value="LeftCompact" />
+                        <Setter Target="Navigation.IsPaneOpen" Value="False" />
                         <Setter Target="Navigation.IsPaneToggleButtonVisible" Value="True" />
                         <Setter Target="HeaderVersionText.Visibility" Value="Collapsed" />
                         <Setter Target="StatusVersionGroup.Visibility" Value="Collapsed" />
@@ -23,6 +24,7 @@
                     </VisualState.StateTriggers>
                     <VisualState.Setters>
                         <Setter Target="Navigation.PaneDisplayMode" Value="Left" />
+                        <Setter Target="Navigation.IsPaneOpen" Value="True" />
                         <Setter Target="Navigation.IsPaneToggleButtonVisible" Value="False" />
                         <Setter Target="HeaderVersionText.Visibility" Value="Visible" />
                         <Setter Target="StatusVersionGroup.Visibility" Value="Visible" />
@@ -35,6 +37,7 @@
                     </VisualState.StateTriggers>
                     <VisualState.Setters>
                         <Setter Target="Navigation.PaneDisplayMode" Value="Left" />
+                        <Setter Target="Navigation.IsPaneOpen" Value="True" />
                         <Setter Target="Navigation.IsPaneToggleButtonVisible" Value="False" />
                         <Setter Target="HeaderVersionText.Visibility" Value="Visible" />
                         <Setter Target="StatusVersionGroup.Visibility" Value="Visible" />
@@ -102,7 +105,7 @@
                     </Border>
                 </Grid>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Spacing="8">
-                    <Button Click="SettingsButton_Click" ToolTipService.ToolTip="Connection and application settings">
+                    <Button Click="SettingsButton_Click" MinHeight="30" Padding="10,4" FontSize="13" ToolTipService.ToolTip="Connection and application settings">
                         <StackPanel Orientation="Horizontal" Spacing="7"><FontIcon Glyph="&#xE713;" /><TextBlock Text="Settings" /></StackPanel>
                     </Button>
                     <Button x:Name="DisconnectButton" Click="DisconnectButton_Click" Style="{StaticResource DangerButtonStyle}" IsEnabled="False" Content="Disconnect" />
@@ -128,11 +131,15 @@
         </NavigationView>
 
         <Border Grid.Row="2" Background="{StaticResource NavBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="16,0">
-            <Grid ColumnSpacing="20">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                 <TextBlock x:Name="StatusText" VerticalAlignment="Center" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" Text="Ready. Select a hardware profile or connect a device." TextTrimming="CharacterEllipsis" />
-                <TextBlock x:Name="CustomerIdStatusText" Grid.Column="1" VerticalAlignment="Center" FontSize="12" FontFamily="Cascadia Mono" FontWeight="SemiBold" Foreground="{StaticResource WarningBrush}" Text="CUST ID  0000000000  /  UNPROVISIONED" />
-                <StackPanel x:Name="StatusVersionGroup" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Spacing="6">
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="5">
+                    <FontIcon Glyph="&#xE72E;" FontSize="10" Foreground="{StaticResource WarningBrush}" />
+                    <TextBlock x:Name="ControlAccessStatusText" VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource WarningBrush}" Text="CONTROLS LOCKED  /  VERIFIED MANIFEST REQUIRED" />
+                </StackPanel>
+                <TextBlock x:Name="CustomerIdStatusText" Grid.Column="2" VerticalAlignment="Center" FontSize="12" FontFamily="Cascadia Mono" FontWeight="SemiBold" Foreground="{StaticResource WarningBrush}" Text="CUST ID  0000000000  /  UNPROVISIONED" />
+                <StackPanel x:Name="StatusVersionGroup" Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center" Spacing="6">
                     <FontIcon Glyph="&#xE72E;" FontSize="11" Foreground="{StaticResource AccentBrush}" />
                     <TextBlock x:Name="StatusVersionText" VerticalAlignment="Center" FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Text="UnifiedLicGen" />
                 </StackPanel>
@@ -145,7 +152,7 @@
                 <StackPanel Spacing="10">
                         <Grid>
                             <StackPanel><TextBlock Style="{StaticResource PageTitleStyle}" Text="Settings" /><TextBlock Style="{StaticResource SecondaryTextStyle}" Text="Connection, polling and service options" /></StackPanel>
-                            <Button HorizontalAlignment="Right" VerticalAlignment="Top" Click="CloseSettings_Click" Content="Close" />
+                            <Button HorizontalAlignment="Right" VerticalAlignment="Top" Click="CloseSettings_Click" MinHeight="30" Padding="10,4" FontSize="13" Content="Close" />
                         </Grid>
                         <Border Style="{StaticResource CardStyle}">
                             <StackPanel Spacing="12">
@@ -153,7 +160,7 @@
                                 <TextBlock Text="Both supported card types are probed on this shared port." Style="{StaticResource SecondaryTextStyle}" TextWrapping="Wrap" />
                                 <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                     <ComboBox x:Name="PortBox" Header="COM port" PlaceholderText="No ports found" />
-                                    <Button Grid.Column="1" VerticalAlignment="Bottom" Click="RefreshPorts_Click" Content="Refresh" />
+                                    <Button Grid.Column="1" VerticalAlignment="Bottom" Click="RefreshPorts_Click" MinHeight="30" Padding="10,4" FontSize="13" Content="Refresh" />
                                 </Grid>
                                 <Grid ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <ComboBox x:Name="BaudBox" Header="Baud" SelectedIndex="2"><ComboBoxItem Content="9600" /><ComboBoxItem Content="19200" /><ComboBoxItem Content="38400" /><ComboBoxItem Content="115200" /></ComboBox>
@@ -162,7 +169,7 @@
                                         <NumberBox x:Name="StepperSlaveIdBox" Width="82" Header="Stepper ID" Value="2" Minimum="1" Maximum="247" SpinButtonPlacementMode="Compact" />
                                     </StackPanel>
                                 </Grid>
-                                <Button Click="ConnectButton_Click" Style="{StaticResource PrimaryButtonStyle}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Content="Connect and identify" />
+                                <Button Click="ConnectButton_Click" Style="{StaticResource PrimaryButtonStyle}" Content="Connect and identify" />
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource CardStyle}">
@@ -177,9 +184,9 @@
                         <Expander Header="Service and diagnostics">
                             <StackPanel Spacing="10" Padding="0,10,0,0">
                                 <PasswordBox x:Name="MasterPasswordBox" Header="Temporary service unlock" PlaceholderText="Service password" />
-                                <Button Click="ServiceUnlock_Click" Content="Unlock for this session" />
+                                <Button Click="ServiceUnlock_Click" MinHeight="30" Padding="10,4" FontSize="13" Content="Unlock for this session" />
                                 <ToggleSwitch Header="Show raw protocol diagnostics" />
-                                <Button Content="Open log folder" />
+                                <Button MinHeight="30" Padding="10,4" FontSize="13" Content="Open log folder" />
                             </StackPanel>
                         </Expander>
                 </StackPanel>

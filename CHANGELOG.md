@@ -2,7 +2,7 @@
 
 All notable changes to UnifiedLicGen are documented here.
 
-## [Unreleased]
+## [2.0.1] - 2026-07-27
 
 ### Added
 
@@ -12,6 +12,8 @@ All notable changes to UnifiedLicGen are documented here.
 - WS2812 color selection has regression coverage to preserve exact RGB channel mapping.
 - The native title bar lists the serial number of every detected card, while the application header groups each card's serial and Customer ID together.
 - Finalized cards can be rebuilt and reflashed through a separate maintenance action without regenerating CDI, keys, manifests, or identity headers.
+- Technician v1.0.2's vertical-axis Stepper workspace, aligned field actions, live limit indicators, and footer authorization state are now shared by the Admin dashboard.
+- Critical failures can surface as temporary in-app notifications without turning routine control feedback into persistent page clutter.
 
 ### Changed
 
@@ -20,6 +22,16 @@ All notable changes to UnifiedLicGen are documented here.
 - The global header uses aligned, card-specific identity groups instead of one ambiguous shared serial/Customer ID pair.
 - Firmware reconnect selects the configured slave address for the active ASM or Stepper firmware target.
 - Maintenance reflash requires exact live-card, firmware-header, trusted-manifest, typed-serial, and post-flash identity agreement; it also rejects a changed ELF after operator review.
+- Primary and danger actions use the compact technician sizing system, while routine status and control-access state remain in the persistent footer.
+
+### Fixed
+
+- Stepper live position, status, fault, command, IP1, IP2, and encoder state now continue polling when no ASM card is present.
+- Repeated communication or identity failures revoke the affected card's authorization, and every hardware write revalidates the live card identity first.
+- Jog distance and jog direction are written as one serialized operation; WS2812 rainbow frames use one shared frame write path.
+- Manifest preference files are persisted atomically so a partial write cannot replace a previously trusted manifest path.
+- Replaced the invalid onboard-LED output toggle with read-only communication heartbeat status and restricted persistent ASM writes to the blower bit.
+- Made brightness changes redraw the current WS2812 frame immediately.
 
 ## [2.0.0] - 2026-07-16
 

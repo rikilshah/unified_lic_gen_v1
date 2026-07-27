@@ -46,12 +46,29 @@ public sealed partial class MainWindow : Window
     private bool _inputPollInProgress;
     private CancellationTokenSource? _rainbowCts;
     private readonly Dictionary<string, Storyboard> _indicatorAnimations = new();
+    private readonly Dictionary<string, bool> _indicatorStates = new();
     private Storyboard? _fanAnimation;
     private bool _syncingAsmControls;
     private bool _lastBlowerOn;
-    private bool _lastOnboardLedOn;
     private Color _selectedWs2812Color = Colors.Black;
     private bool _syncingWs2812Color;
+    private int _asmPollFailures;
+    private int _stepperPollFailures;
+    private int _asmIdentityFailures;
+    private int _stepperIdentityFailures;
+    private DateTimeOffset _nextIdentityValidationUtc = DateTimeOffset.MinValue;
+    private const int PollFailuresBeforeAuthorizationRevoke = 3;
+    private const int IdentityFailuresBeforeAuthorizationRevoke = 2;
+    private static readonly TimeSpan IdentityValidationInterval = TimeSpan.FromSeconds(6);
+    private readonly Dictionary<InfoBar, Microsoft.UI.Dispatching.DispatcherQueueTimer> _toastTimers = new();
+    private readonly StackPanel _notificationHost = new()
+    {
+        Width = 400,
+        HorizontalAlignment = HorizontalAlignment.Right,
+        VerticalAlignment = VerticalAlignment.Top,
+        Margin = new Thickness(0, 76, 18, 0),
+        Spacing = 8
+    };
     private CardIdentityCdi? _currentCdi;
     private string? _currentCdiPath;
     private readonly CardManifestService _manifestService = new();
@@ -90,6 +107,9 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Grid.SetRowSpan(_notificationHost, 3);
+        Canvas.SetZIndex(_notificationHost, 100);
+        ((Grid)Content).Children.Add(_notificationHost);
         _inputPollTimer = DispatcherQueue.CreateTimer();
         _inputPollTimer.Interval = TimeSpan.FromMilliseconds(300);
         _inputPollTimer.IsRepeating = true;
@@ -411,7 +431,6 @@ public sealed partial class MainWindow : Window
     private UIElement BuildAsmControlPage()
     {
         var root = Page("ASM controls", "Compact live control for PWM, digital I/O and WS2812 outputs.");
-        root.Children.Add(AuthGate());
         var live = Columns(4);
         live.Children.Add(ValueCard("PWM1", "0", "Applied / 1023", "AsmPwm1Applied"));
         live.Children.Add(ValueCard("PWM2", "0", "Applied / 1023", "AsmPwm2Applied"));
@@ -429,13 +448,11 @@ public sealed partial class MainWindow : Window
 
         var io = Card("Inputs and outputs");
         var blower = new ToggleSwitch { Name = "AsmBlower", Header = "Blower", OffContent = "Off", OnContent = "On" };
-        blower.Toggled += AsmOutput_Toggled;
+        blower.Toggled += AsmBlower_Toggled;
         var fan = BuildFanIndicator();
-        var onboardLed = new ToggleSwitch { Name = "AsmOnboardLed", Header = "Onboard LED", OffContent = "Off", OnContent = "On" };
-        onboardLed.Toggled += AsmOutput_Toggled;
         var outputs = Columns(2);
         outputs.Children.Add(RowWith(blower, fan));
-        outputs.Children.Add(onboardLed);
+        outputs.Children.Add(CompactStatus("Communication heartbeat", "Idle", "AsmHeartbeat"));
         io.Children.Add(outputs);
         var inputs = Columns(2);
         inputs.Children.Add(InputIndicator("IP1", "AsmIp1", "AsmIp1Dot"));
@@ -480,7 +497,7 @@ public sealed partial class MainWindow : Window
         ledActions.Children.Add(ActionButton("Clear", async (_, _) => await ClearAsmLedsAsync()));
         ledControls.Children.Add(ledActions);
         var animationActions = Columns(2);
-        animationActions.Children.Add(ActionButton("Start rainbow", (_, _) => StartRainbowSweep(), true));
+        animationActions.Children.Add(ActionButton("Start rainbow", async (_, _) => await StartRainbowSweepAsync(), true));
         animationActions.Children.Add(ActionButton("Stop rainbow", (_, _) => StopRainbowSweep()));
         ledControls.Children.Add(animationActions);
         Grid.SetColumn(ledControls, 2); lighting.Children.Add(ledControls);
@@ -515,33 +532,70 @@ public sealed partial class MainWindow : Window
 
     private UIElement BuildStepperControlPageV2()
     {
-        var root = Page("Stepper controls", "Motion and setup grouped by positioning, jog, reference and drive configuration.");
-        root.Children.Add(AuthGate());
-        var live = Columns(4);
-        live.Children.Add(ValueCard("POSITION", "0", "Pulses", "StepperPosition")); live.Children.Add(ValueCard("STATE", "Idle", "Drive", "StepperState"));
-        live.Children.Add(ValueCard("FAULT", "0", "Code", "StepperFault")); live.Children.Add(ValueCard("COMMAND", "0", "Active pulses", "StepperCommand")); root.Children.Add(live);
+        var root = Page("Stepper controls", "Vertical-axis position, travel limits and compact motion commands.");
+
+        var axis = Card("Vertical axis");
+        axis.Padding = new Thickness(10);
+        axis.Spacing = 6;
+        var axisOverview = new Grid { ColumnSpacing = 16, HorizontalAlignment = HorizontalAlignment.Stretch };
+        axisOverview.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(104) });
+        axisOverview.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(5, GridUnitType.Star) });
+        axisOverview.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4, GridUnitType.Star) });
+        axisOverview.Children.Add(BuildVerticalAxisDiagram());
+
+        var live = Columns(2);
+        live.ColumnSpacing = 8;
+        live.RowSpacing = 8;
+        live.Children.Add(AxisMetric("POSITION", "0", "pulses", "StepperPosition"));
+        live.Children.Add(AxisMetric("STATE", "Idle", "drive", "StepperState"));
+        live.Children.Add(AxisMetric("COMMAND", "0", "active pulses", "StepperCommand"));
+        live.Children.Add(AxisMetric("FAULT", "0", "code", "StepperFault"));
+        Grid.SetColumn(live, 1);
+        axisOverview.Children.Add(live);
+
+        var limits = new StackPanel { Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
+        limits.Children.Add(new TextBlock { Text = "TRAVEL LIMITS", FontSize = 11, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = Brush("TextSecondaryBrush") });
+        limits.Children.Add(InputIndicator("Limit switch · IP1", "StepperIp1", "StepperIp1Dot"));
+        limits.Children.Add(InputIndicator("Limit switch · IP2", "StepperIp2", "StepperIp2Dot"));
+        limits.Children.Add(CompactStatus("Encoder Z", "Inactive", "StepperEncoderSummary"));
+        limits.Children.Add(new TextBlock { Text = "Green pulse = active · Red = clear", FontSize = 11, Foreground = Brush("TextSecondaryBrush") });
+        Grid.SetColumn(limits, 2);
+        axisOverview.Children.Add(limits);
+        axis.Children.Add(axisOverview);
+        root.Children.Add(axis);
 
         var actions = Columns(3);
+        actions.ColumnSpacing = 10;
+        actions.RowSpacing = 10;
         var positioning = Card("Positioning");
-        var relativeRow = Columns(2);
-        var relative = Number("Relative pulses", 1000, int.MinValue, int.MaxValue); relative.Name = "StepperRelative"; relativeRow.Children.Add(relative);
-        relativeRow.Children.Add(ActionButton("Move relative", async (_, _) => await MoveStepperRelativeAsync(), true)); positioning.Children.Add(relativeRow);
-        var absoluteRow = Columns(2);
-        var absolute = Number("Absolute pulses", 0, 0, uint.MaxValue); absolute.Name = "StepperAbsolute"; absoluteRow.Children.Add(absolute);
-        absoluteRow.Children.Add(ActionButton("Move absolute", async (_, _) => await MoveStepperAbsoluteAsync(), true)); positioning.Children.Add(absoluteRow); actions.Children.Add(positioning);
+        positioning.Padding = new Thickness(10);
+        positioning.Spacing = 6;
+        var relative = Number("Relative pulses", 1000, int.MinValue, int.MaxValue); relative.Name = "StepperRelative";
+        positioning.Children.Add(StepperFieldActionRow(relative, ActionButton("Move relative", async (_, _) => await MoveStepperRelativeAsync(), true)));
+        var absolute = Number("Absolute pulses", 0, 0, uint.MaxValue); absolute.Name = "StepperAbsolute";
+        positioning.Children.Add(StepperFieldActionRow(absolute, ActionButton("Move absolute", async (_, _) => await MoveStepperAbsoluteAsync(), true)));
+        actions.Children.Add(positioning);
 
         var manual = Card("Manual movement");
-        var jog = Number("Jog chunk", 100, 0, ushort.MaxValue); jog.Name = "StepperJogChunk"; manual.Children.Add(jog);
-        manual.Children.Add(RowWith(ActionButton("Jog −", async (_, _) => await JogStepperAsync(false)), ActionButton("Jog +", async (_, _) => await JogStepperAsync(true), true)));
-        manual.Children.Add(CompactStatus("Inputs", "None active", "StepperInputSummary")); actions.Children.Add(manual);
+        manual.Padding = new Thickness(10);
+        manual.Spacing = 6;
+        var jog = Number("Jog distance (pulses)", 100, 0, ushort.MaxValue); jog.Name = "StepperJogChunk"; jog.Width = 180; jog.HorizontalAlignment = HorizontalAlignment.Left; manual.Children.Add(jog);
+        manual.Children.Add(RowWith(ActionButton("Jog up  ↑", async (_, _) => await JogStepperAsync(true), true), ActionButton("Jog down  ↓", async (_, _) => await JogStepperAsync(false))));
+        manual.Children.Add(new TextBlock { Text = "Movement follows the configured motor direction.", FontSize = 11, Foreground = Brush("TextSecondaryBrush"), TextWrapping = TextWrapping.Wrap });
+        actions.Children.Add(manual);
 
         var reference = Card("Reference");
-        reference.Children.Add(new TextBlock { Text = "Reset establishes position zero. Homing runs the configured sequence.", Foreground = Brush("TextSecondaryBrush"), TextWrapping = TextWrapping.Wrap });
+        reference.Padding = new Thickness(10);
+        reference.Spacing = 6;
+        reference.Children.Add(new TextBlock { Text = "Establish zero or run the configured homing sequence.", FontSize = 12, Foreground = Brush("TextSecondaryBrush"), TextWrapping = TextWrapping.Wrap });
         reference.Children.Add(RowWith(ActionButton("Reset position", async (_, _) => await ResetStepperPositionAsync()), ActionButton("Start homing", async (_, _) => await StartStepperHomingAsync(), true)));
         reference.Children.Add(ActionButton("Refresh live state", async (_, _) => await RefreshStepperDashboardAsync())); actions.Children.Add(reference); root.Children.Add(actions);
 
         var config = Card("Drive setup");
+        config.Padding = new Thickness(10);
+        config.Spacing = 6;
         var cfg = Columns(5);
+        cfg.ColumnSpacing = 10;
         AddNamedNumber(cfg, "StepperMicrostep", "Microstep", 16); AddNamedNumber(cfg, "StepperPpr", "Pulses / rev", 3200);
         AddNamedNumber(cfg, "StepperAcceleration", "Acceleration", 1000); AddNamedNumber(cfg, "StepperDeceleration", "Deceleration", 1000); AddNamedNumber(cfg, "StepperVelocity", "Velocity", 2000); config.Children.Add(cfg);
         var advanced = new Expander { Header = "Advanced homing, deadband and driver flags" };
@@ -557,6 +611,72 @@ public sealed partial class MainWindow : Window
         advanced.Content = advancedPanel; config.Children.Add(advanced);
         config.Children.Add(RowWith(ActionButton("Refresh setup", async (_, _) => await ReadStepperConfigurationAsync(), true), ActionButton("Write and verify", async (_, _) => await WriteStepperConfigurationAsync()))); root.Children.Add(config);
         return root;
+    }
+
+    private Grid StepperFieldActionRow(NumberBox field, Button action)
+    {
+        var row = new Grid { ColumnSpacing = 12, HorizontalAlignment = HorizontalAlignment.Stretch, MaxWidth = 300 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 108, MaxWidth = 176 });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        field.MinWidth = 108;
+        field.MaxWidth = 176;
+        field.HorizontalAlignment = HorizontalAlignment.Stretch;
+        action.MinHeight = 32;
+        action.VerticalAlignment = VerticalAlignment.Bottom;
+        row.Children.Add(field);
+        Grid.SetColumn(action, 1);
+        row.Children.Add(action);
+        return row;
+    }
+
+    private Grid BuildVerticalAxisDiagram()
+    {
+        var diagram = new Grid { Width = 92, Height = 126, HorizontalAlignment = HorizontalAlignment.Center };
+        diagram.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        diagram.RowDefinitions.Add(new RowDefinition());
+        diagram.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        diagram.Children.Add(new TextBlock { Text = "UP  +", FontSize = 11, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = Brush("AccentBrush"), HorizontalAlignment = HorizontalAlignment.Center });
+
+        var travel = new Grid { Margin = new Thickness(0, 5, 0, 5) };
+        travel.Children.Add(new Border { Width = 4, Background = Brush("BorderBrush"), CornerRadius = new CornerRadius(2), HorizontalAlignment = HorizontalAlignment.Center });
+        travel.Children.Add(new Border
+        {
+            Width = 42,
+            Height = 20,
+            Background = Brush("AccentBrush"),
+            CornerRadius = new CornerRadius(3),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock { Text = "AXIS", FontSize = 9, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = new SolidColorBrush(ColorHelper.FromArgb(255, 7, 16, 20)), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+        });
+        Grid.SetRow(travel, 1);
+        diagram.Children.Add(travel);
+
+        var down = new TextBlock { Text = "DOWN  −", FontSize = 11, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = Brush("TextSecondaryBrush"), HorizontalAlignment = HorizontalAlignment.Center };
+        Grid.SetRow(down, 2);
+        diagram.Children.Add(down);
+        return diagram;
+    }
+
+    private Border AxisMetric(string label, string value, string detail, string valueName)
+    {
+        var valueText = new TextBlock { Name = valueName, Text = value, FontFamily = new FontFamily("Cascadia Mono"), FontSize = 18, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold };
+        return new Border
+        {
+            Background = Brush("RaisedBrush"),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(9, 6, 9, 6),
+            Child = new StackPanel
+            {
+                Spacing = 1,
+                Children =
+                {
+                    new TextBlock { Text = label, FontSize = 10, Foreground = Brush("TextSecondaryBrush") },
+                    valueText,
+                    new TextBlock { Text = detail, FontSize = 11, Foreground = Brush("TextSecondaryBrush") }
+                }
+            }
+        };
     }
 
     private static void AddNamedNumber(Panel panel, string name, string header, double value)
@@ -670,7 +790,7 @@ public sealed partial class MainWindow : Window
 
     private StackPanel Row() => new() { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
     private StackPanel RowWith(params UIElement[] controls) { var row = Row(); foreach (var c in controls) row.Children.Add(c); return row; }
-    private Button ActionButton(string text, RoutedEventHandler handler, bool primary = false) { var b = new Button { Content = text, MinHeight = 34, Padding = new Thickness(12, 5, 12, 5), HorizontalAlignment = HorizontalAlignment.Stretch }; if (primary) b.Style = (Style)Application.Current.Resources["PrimaryButtonStyle"]; b.Click += handler; return b; }
+    private Button ActionButton(string text, RoutedEventHandler handler, bool primary = false) { var b = new Button { Content = text, MinHeight = 30, Padding = new Thickness(10, 4, 10, 4), FontSize = 13, HorizontalAlignment = HorizontalAlignment.Left, MaxWidth = 190 }; if (primary) b.Style = (Style)Application.Current.Resources["PrimaryButtonStyle"]; b.Click += handler; return b; }
     private TextBox Input(string header, string value) => new() { Header = header, Text = value };
     private NumberBox Number(string header, double value, double min, double max) => new() { Header = header, Value = value, Minimum = min, Maximum = max, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, MinWidth = 112, HorizontalAlignment = HorizontalAlignment.Stretch };
     private TextBox ReadOnlyField(string header, string value) => new() { Header = header, Text = value, IsReadOnly = true, FontFamily = new FontFamily("Cascadia Mono"), TextWrapping = TextWrapping.Wrap };
@@ -802,6 +922,8 @@ public sealed partial class MainWindow : Window
         SetText(textName, active ? "Active" : "Inactive");
         if (FindNameInPages<Microsoft.UI.Xaml.Shapes.Ellipse>(dotName) is not { } dot) return;
         dot.Fill = active ? Brush("SuccessBrush") : Brush("ErrorBrush");
+        if (_indicatorStates.TryGetValue(dotName, out var previous) && previous == active) return;
+        _indicatorStates[dotName] = active;
         if (active)
         {
             if (!_indicatorAnimations.TryGetValue(dotName, out var pulse))
@@ -813,6 +935,16 @@ public sealed partial class MainWindow : Window
             pulse.Begin();
         }
         else if (_indicatorAnimations.TryGetValue(dotName, out var pulse)) { pulse.Stop(); dot.Opacity = 1; }
+    }
+
+    private void SetInputIndicatorUnknown(string textName, string dotName)
+    {
+        SetText(textName, "Unknown");
+        _indicatorStates.Remove(dotName);
+        if (FindNameInPages<Microsoft.UI.Xaml.Shapes.Ellipse>(dotName) is not { } dot) return;
+        if (_indicatorAnimations.TryGetValue(dotName, out var pulse)) pulse.Stop();
+        dot.Opacity = 1;
+        dot.Fill = Brush("WarningBrush");
     }
 
     private void UpdateFanAnimation(bool running)
@@ -994,7 +1126,8 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            _authorized = false;
+            _authorized = _asmAuthorized = _stepperAuthorized = false;
+            UpdateAuthorizationBadge();
             AuthText.Text = "READ FAILED";
             AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(48, 255, 107, 107));
             SetStatus($"Authorization identity refresh failed: {ex.Message}. Reconnect after flashing and retry.");
@@ -1138,6 +1271,8 @@ public sealed partial class MainWindow : Window
             SetFirmwareTarget(provisioningProfile);
             _connected = true;
             _authorized = _asmAuthorized = _stepperAuthorized = false;
+            _asmPollFailures = _stepperPollFailures = _asmIdentityFailures = _stepperIdentityFailures = 0;
+            _nextIdentityValidationUtc = DateTimeOffset.UtcNow + IdentityValidationInterval;
             _customerIdSession = null;
             ResetProvisioningPhases();
             if (primary.CustomerId10 == "0000000000")
@@ -1201,7 +1336,7 @@ public sealed partial class MainWindow : Window
                 cdiResult = $" CDI is retained internally, but database save failed: {cdiException.Message}";
             }
             if (provisioningProfile.Id == "stepper") await RefreshStepperLiveStatusAsync();
-            if (_asmIdentity is not null) StartInputPolling();
+            if (_asmIdentity is not null || provisioningProfile.Id == "stepper") StartInputPolling();
             ConnectionDot.Fill = Brush("SuccessBrush"); ConnectionText.Text = "Connected"; DisconnectButton.IsEnabled = true;
             DeviceTypeText.Text = _deviceProfile == "both" ? "2 cards online" : _deviceProfile == "asm" ? $"ASM · ID {asmSlave}" : $"Stepper · ID {stepperSlave}";
             if (_asmIdentity is not null) SetCardIdentityHeader("asm", _asmIdentity.SerialNumber, _asmIdentity.CustomerId10);
@@ -1243,7 +1378,7 @@ public sealed partial class MainWindow : Window
         _stepperAuthorized = authorization.StepperAuthorized;
         _authorized = authorization.AnyAuthorized;
 
-        var displayed = authorization.Stepper ?? authorization.Asm;
+        var displayed = authorization.PreferredDisplayResult;
         if (displayed is not null)
         {
             SetAuthCheck("AuthSerial", displayed.SerialMatches);
@@ -1254,18 +1389,7 @@ public sealed partial class MainWindow : Window
             SetAuthCheck("AuthFirmware", displayed.FirmwarePolicyMatches);
         }
 
-        AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(
-            48,
-            _authorized ? (byte)72 : (byte)255,
-            _authorized ? (byte)199 : (byte)107,
-            _authorized ? (byte)142 : (byte)107));
-        AuthText.Text = authorization.AuthorizedCount switch
-        {
-            2 => "2 CARDS VERIFIED",
-            1 when _asmAuthorized => "ASM VERIFIED",
-            1 => "STEPPER VERIFIED",
-            _ => "NOT AUTHORIZED"
-        };
+        UpdateAuthorizationBadge();
 
         var missing = string.Join(" + ", new[]
         {
@@ -1303,7 +1427,7 @@ public sealed partial class MainWindow : Window
         _inputPollTimer.Stop();
         await _stepperModbus.DisconnectAsync();
         UpdateCustomerIdStatus(null);
-        _connected = false; _authorized = _asmAuthorized = _stepperAuthorized = false; _asmIdentity = _stepperIdentity = null; _customerIdSession = null; ResetProvisioningPhases(); _deviceProfile = "none"; ConnectionDot.Fill = Brush("ErrorBrush"); ConnectionText.Text = "Disconnected"; DeviceTypeText.Text = "No cards"; ClearCardIdentityHeaders(); AuthText.Text = "NOT AUTHORIZED"; AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(51, 43, 55, 70)); DisconnectButton.IsEnabled = false; SetStatus("Disconnected. Authorization and hardware writes were cleared.");
+        _connected = false; _authorized = _asmAuthorized = _stepperAuthorized = false; _asmIdentity = _stepperIdentity = null; _asmPollFailures = _stepperPollFailures = _asmIdentityFailures = _stepperIdentityFailures = 0; _nextIdentityValidationUtc = DateTimeOffset.MinValue; _customerIdSession = null; ResetProvisioningPhases(); _deviceProfile = "none"; ConnectionDot.Fill = Brush("ErrorBrush"); ConnectionText.Text = "Disconnected"; DeviceTypeText.Text = "No cards"; ClearCardIdentityHeaders(); AuthText.Text = "NOT AUTHORIZED"; AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(51, 43, 55, 70)); DisconnectButton.IsEnabled = false; SetStatus("Disconnected. Authorization and hardware writes were cleared.");
     }
 
     private async void RefreshPorts_Click(object sender, RoutedEventArgs e) =>
@@ -1359,7 +1483,84 @@ public sealed partial class MainWindow : Window
         MasterPasswordBox.Password = string.Empty; AuthText.Text = "SERVICE OVERRIDE"; AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(48, 244, 184, 96)); SettingsPopup.IsOpen = false; SetStatus("Temporary service override active for this connection.");
     }
 
-    private void SetStatus(string message) => StatusText.Text = $"{DateTime.Now:HH:mm:ss}  {message}";
+    private void SetStatus(string message, bool notify = false)
+    {
+        StatusText.Text = $"{DateTime.Now:HH:mm:ss}  {message}";
+        UpdateControlAccessStatus();
+        if (notify) ShowToast(message);
+    }
+
+    private void UpdateControlAccessStatus()
+    {
+        if (_asmAuthorized && _stepperAuthorized)
+        {
+            ControlAccessStatusText.Text = "ASM + STEPPER CONTROLS ENABLED";
+            ControlAccessStatusText.Foreground = Brush("SuccessBrush");
+            return;
+        }
+
+        if (_asmAuthorized || _stepperAuthorized)
+        {
+            ControlAccessStatusText.Text = $"{(_asmAuthorized ? "ASM" : "STEPPER")} CONTROLS ENABLED";
+            ControlAccessStatusText.Foreground = Brush("SuccessBrush");
+            return;
+        }
+
+        ControlAccessStatusText.Text = _connected
+            ? "CONTROLS LOCKED  /  VERIFIED MANIFEST REQUIRED"
+            : "CONTROLS LOCKED  /  CONNECT + VERIFY";
+        ControlAccessStatusText.Foreground = _connected ? Brush("WarningBrush") : Brush("TextSecondaryBrush");
+    }
+
+    private void ShowToast(string message, InfoBarSeverity? severity = null, TimeSpan? duration = null)
+    {
+        var resolvedSeverity = severity ?? InferToastSeverity(message);
+        var toast = new InfoBar
+        {
+            IsOpen = true,
+            IsClosable = true,
+            Severity = resolvedSeverity,
+            Message = message,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        toast.Closed += (_, _) => RemoveToast(toast);
+
+        if (_notificationHost.Children.Count >= 4 && _notificationHost.Children[0] is InfoBar oldest)
+            oldest.IsOpen = false;
+        _notificationHost.Children.Add(toast);
+
+        var timer = DispatcherQueue.CreateTimer();
+        timer.Interval = duration ?? TimeSpan.FromSeconds(resolvedSeverity == InfoBarSeverity.Error ? 10 : 6);
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) => toast.IsOpen = false;
+        _toastTimers[toast] = timer;
+        timer.Start();
+    }
+
+    private void RemoveToast(InfoBar toast)
+    {
+        if (_toastTimers.Remove(toast, out var timer)) timer.Stop();
+        _notificationHost.Children.Remove(toast);
+    }
+
+    private static InfoBarSeverity InferToastSeverity(string message)
+    {
+        if (message.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("could not", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("denied", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("blocked", StringComparison.OrdinalIgnoreCase)) return InfoBarSeverity.Error;
+        if (message.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("not ready", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("no card", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("unprovisioned", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("waiting", StringComparison.OrdinalIgnoreCase)) return InfoBarSeverity.Warning;
+        if (message.Contains("authorized", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("connected", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("verified", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("applied", StringComparison.OrdinalIgnoreCase)) return InfoBarSeverity.Success;
+        return InfoBarSeverity.Informational;
+    }
 
     private void UpdateCustomerIdStatus(string? customerId, bool pendingFlash = false)
     {
@@ -1466,25 +1667,201 @@ public sealed partial class MainWindow : Window
     {
         var interval = double.IsNaN(LiveStatusIntervalBox.Value) ? 300 : Math.Clamp(LiveStatusIntervalBox.Value, 100, 5000);
         _inputPollTimer.Interval = TimeSpan.FromMilliseconds(interval);
+        _nextIdentityValidationUtc = DateTimeOffset.UtcNow + IdentityValidationInterval;
         _inputPollTimer.Start();
     }
 
     private async void InputPollTimer_Tick(Microsoft.UI.Dispatching.DispatcherQueueTimer sender, object args)
     {
-        if (_inputPollInProgress || !_connected || _asmIdentity is null || !_stepperModbus.IsConnected) return;
+        var detectedStepper = GetDetectedStepperIdentity();
+        if (_inputPollInProgress || !_connected || (_asmIdentity is null && detectedStepper is null) || !_stepperModbus.IsConnected) return;
         _inputPollInProgress = true;
         try
         {
-            var status = await _stepperModbus.ReadAsmInputStatusAsync();
-            SetInputIndicator("AsmIp1", "AsmIp1Dot", (status & 0x0008) != 0);
-            SetInputIndicator("AsmIp2", "AsmIp2Dot", (status & 0x0010) != 0);
-            SetText("AsmModbusStatus", (status & 0x0020) != 0 ? "Error" : "Online");
-        }
-        catch
-        {
-            SetText("AsmModbusStatus", "Polling error");
+            if (_asmIdentity is not null)
+            {
+                try
+                {
+                    var status = await _stepperModbus.ReadAsmInputStatusAsync();
+                    SetInputIndicator("AsmIp1", "AsmIp1Dot", (status & 0x0008) != 0);
+                    SetInputIndicator("AsmIp2", "AsmIp2Dot", (status & 0x0010) != 0);
+                    SetText("AsmModbusStatus", (status & 0x0020) != 0 ? "Error" : "Online");
+                    _asmPollFailures = 0;
+                }
+                catch
+                {
+                    SetText("AsmModbusStatus", "Polling error");
+                    SetInputIndicatorUnknown("AsmIp1", "AsmIp1Dot");
+                    SetInputIndicatorUnknown("AsmIp2", "AsmIp2Dot");
+                    RecordPollFailure("asm");
+                }
+            }
+
+            if (detectedStepper is not null)
+            {
+                try
+                {
+                    await RefreshStepperLiveStatusAsync();
+                    _stepperPollFailures = 0;
+                }
+                catch
+                {
+                    SetText("StepperState", "Polling error");
+                    SetInputIndicatorUnknown("StepperIp1", "StepperIp1Dot");
+                    SetInputIndicatorUnknown("StepperIp2", "StepperIp2Dot");
+                    SetText("StepperEncoderSummary", "Unknown");
+                    RecordPollFailure("stepper");
+                }
+            }
+
+            if (DateTimeOffset.UtcNow >= _nextIdentityValidationUtc)
+            {
+                _nextIdentityValidationUtc = DateTimeOffset.UtcNow + IdentityValidationInterval;
+                await RevalidateConnectedIdentitiesAsync();
+            }
         }
         finally { _inputPollInProgress = false; }
+    }
+
+    private void RecordPollFailure(string profile)
+    {
+        var failures = string.Equals(profile, "asm", StringComparison.OrdinalIgnoreCase)
+            ? ++_asmPollFailures
+            : ++_stepperPollFailures;
+        if (failures != PollFailuresBeforeAuthorizationRevoke) return;
+        RevokeCardAuthorization(profile, $"{profile.ToUpperInvariant()} stopped responding. Its controls were locked; reconnect and verify the card.");
+    }
+
+    private async Task RevalidateConnectedIdentitiesAsync()
+    {
+        var identityChanged = false;
+        if (_asmIdentity is not null)
+        {
+            try
+            {
+                var current = await _stepperModbus.ReadIdentityAsync(_stepperModbus.AsmSlaveId);
+                _asmIdentityFailures = 0;
+                if (current != _asmIdentity)
+                {
+                    if (FirmwareTargetProfile.FromSerial(current.SerialNumber)?.Id != "asm")
+                    {
+                        _asmIdentity = null;
+                        AsmIdentityGroup.Visibility = Visibility.Collapsed;
+                        UpdateWindowTitleSerials();
+                        RevokeCardAuthorization("asm", $"ASM slave {_stepperModbus.AsmSlaveId} now responds as another card type. Controls were locked; check the slave IDs.");
+                        return;
+                    }
+                    _asmIdentity = current;
+                    SetCardIdentityHeader("asm", current.SerialNumber, current.CustomerId10);
+                    identityChanged = true;
+                }
+            }
+            catch { RecordIdentityFailure("asm"); }
+        }
+
+        var detectedStepper = GetDetectedStepperIdentity();
+        if (detectedStepper is not null)
+        {
+            try
+            {
+                var current = await _stepperModbus.ReadIdentityAsync(_stepperModbus.StepperSlaveId);
+                _stepperIdentityFailures = 0;
+                if (current != detectedStepper)
+                {
+                    if (FirmwareTargetProfile.FromSerial(current.SerialNumber)?.Id != "stepper")
+                    {
+                        _stepperIdentity = null;
+                        StepperIdentityGroup.Visibility = Visibility.Collapsed;
+                        UpdateWindowTitleSerials();
+                        RevokeCardAuthorization("stepper", $"Stepper slave {_stepperModbus.StepperSlaveId} now responds as another card type. Controls were locked; check the slave IDs.");
+                        return;
+                    }
+                    _stepperIdentity = current;
+                    SetCardIdentityHeader("stepper", current.SerialNumber, current.CustomerId10);
+                    identityChanged = true;
+                }
+            }
+            catch { RecordIdentityFailure("stepper"); }
+        }
+
+        if (identityChanged) ValidateManifestAgainstConnectedCards();
+    }
+
+    private void RecordIdentityFailure(string profile)
+    {
+        var failures = string.Equals(profile, "asm", StringComparison.OrdinalIgnoreCase)
+            ? ++_asmIdentityFailures
+            : ++_stepperIdentityFailures;
+        if (failures != IdentityFailuresBeforeAuthorizationRevoke) return;
+        RevokeCardAuthorization(profile, $"{profile.ToUpperInvariant()} identity could not be revalidated. Its controls were locked; reconnect and verify the card.");
+    }
+
+    private async Task<bool> RevalidateCardBeforeWriteAsync(string profile)
+    {
+        var isAsm = string.Equals(profile, "asm", StringComparison.OrdinalIgnoreCase);
+        var cached = isAsm ? _asmIdentity : GetDetectedStepperIdentity();
+        if (cached is null) return false;
+
+        try
+        {
+            var slaveId = isAsm ? _stepperModbus.AsmSlaveId : _stepperModbus.StepperSlaveId;
+            var current = await _stepperModbus.ReadIdentityAsync(slaveId);
+            if (FirmwareTargetProfile.FromSerial(current.SerialNumber)?.Id != profile)
+            {
+                RevokeCardAuthorization(profile, $"Slave {slaveId} no longer identifies as {profile}. Controls were locked; check the slave IDs.");
+                return false;
+            }
+
+            if (current != cached)
+            {
+                if (isAsm)
+                {
+                    _asmIdentity = current;
+                    SetCardIdentityHeader("asm", current.SerialNumber, current.CustomerId10);
+                }
+                else
+                {
+                    _stepperIdentity = current;
+                    SetCardIdentityHeader("stepper", current.SerialNumber, current.CustomerId10);
+                }
+                ValidateManifestAgainstConnectedCards();
+            }
+
+            if (isAsm) _asmIdentityFailures = 0;
+            else _stepperIdentityFailures = 0;
+            return isAsm ? _asmAuthorized : _stepperAuthorized;
+        }
+        catch (Exception ex)
+        {
+            RevokeCardAuthorization(profile, $"{profile.ToUpperInvariant()} identity check failed before a hardware write: {ex.Message}. Controls were locked.");
+            return false;
+        }
+    }
+
+    private void RevokeCardAuthorization(string profile, string message)
+    {
+        if (string.Equals(profile, "asm", StringComparison.OrdinalIgnoreCase)) _asmAuthorized = false;
+        else _stepperAuthorized = false;
+        _authorized = _asmAuthorized || _stepperAuthorized;
+        UpdateAuthorizationBadge();
+        SetStatus(message, notify: true);
+    }
+
+    private void UpdateAuthorizationBadge()
+    {
+        AuthBadge.Background = new SolidColorBrush(ColorHelper.FromArgb(
+            48,
+            _authorized ? (byte)72 : (byte)255,
+            _authorized ? (byte)199 : (byte)107,
+            _authorized ? (byte)142 : (byte)107));
+        AuthText.Text = (_asmAuthorized, _stepperAuthorized) switch
+        {
+            (true, true) => "2 CARDS VERIFIED",
+            (true, false) => "ASM VERIFIED",
+            (false, true) => "STEPPER VERIFIED",
+            _ => "NOT AUTHORIZED"
+        };
+        UpdateControlAccessStatus();
     }
 
     private async Task RestoreManifestAsync()
@@ -1534,17 +1911,33 @@ public sealed partial class MainWindow : Window
 
     private async Task LoadManifestAsync(string path, bool persist)
     {
-        _loadedManifest = await _manifestService.LoadAsync(path);
-        _loadedManifestPath = path;
-        var profile = CardManifestService.ManifestProfile(_loadedManifest);
-        _trustedManifests[profile] = _loadedManifest;
-        _trustedManifestPaths[profile] = path;
-        UpdateManifestSlotDisplay();
+        var manifest = await _manifestService.LoadAsync(path);
+        var profile = CardManifestService.ManifestProfile(manifest);
         if (persist)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(ManifestPreferencePath)!);
-            await File.WriteAllTextAsync(ManifestPreferencePath, path);
-            await File.WriteAllTextAsync(ManifestPreferenceFile(profile), path);
+            Directory.CreateDirectory(ManifestPreferenceFolder);
+            await PersistTextAtomicallyAsync(ManifestPreferencePath, path);
+            await PersistTextAtomicallyAsync(ManifestPreferenceFile(profile), path);
+        }
+
+        _loadedManifest = manifest;
+        _loadedManifestPath = path;
+        _trustedManifests[profile] = manifest;
+        _trustedManifestPaths[profile] = path;
+        UpdateManifestSlotDisplay();
+    }
+
+    private static async Task PersistTextAtomicallyAsync(string path, string value)
+    {
+        var temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await File.WriteAllTextAsync(temporaryPath, value);
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
         }
     }
 
@@ -1689,6 +2082,9 @@ public sealed partial class MainWindow : Window
         if ((status.Status & 0x0002) != 0) states.Add("Jogging");
         if ((status.Status & 0x0008) != 0) states.Add("Homing");
         if (FindNameInPages<TextBlock>("StepperState") is { } state) state.Text = states.Count == 0 ? "Idle" : string.Join(" | ", states);
+        SetInputIndicator("StepperIp1", "StepperIp1Dot", status.Ip1);
+        SetInputIndicator("StepperIp2", "StepperIp2Dot", status.Ip2);
+        SetText("StepperEncoderSummary", status.EncZ || status.EncZRaw ? "Active" : "Inactive");
         var activeInputs = new List<string>();
         if (status.Ip1) activeInputs.Add("IP1"); if (status.Ip2) activeInputs.Add("IP2"); if (status.EncZ) activeInputs.Add("ENC_Z"); if (status.EncZRaw) activeInputs.Add("ENC_Z raw");
         SetText("StepperInputSummary", activeInputs.Count == 0 ? "None active" : string.Join(" · ", activeInputs));
@@ -1705,7 +2101,8 @@ public sealed partial class MainWindow : Window
     private async Task RunStepperCommandAsync(string operation, Func<Task> command)
     {
         if (!CanControlStepper()) return;
-        try { await command(); await Task.Delay(80); await RefreshStepperLiveStatusAsync(); SetStatus($"Stepper {operation} accepted and register readback passed."); }
+        if (!await RevalidateCardBeforeWriteAsync("stepper")) return;
+        try { await command(); await Task.Delay(StepperModbusService.CommandStatusSettleDelay); await RefreshStepperLiveStatusAsync(); SetStatus($"Stepper {operation} accepted and register readback passed."); }
         catch (Exception ex) { SetStatus($"Stepper {operation} failed: {ex.Message}"); }
     }
 
@@ -1723,12 +2120,9 @@ public sealed partial class MainWindow : Window
 
     private Task MoveStepperRelativeAsync() => RunStepperCommandAsync("relative move", () => _stepperModbus.MoveStepperRelativeAsync(I32(FindNameInPages<NumberBox>("StepperRelative"), "relative target")));
     private Task MoveStepperAbsoluteAsync() => RunStepperCommandAsync("absolute move", () => _stepperModbus.MoveStepperAbsoluteAsync(U32(FindNameInPages<NumberBox>("StepperAbsolute"), "absolute target")));
-    private Task JogStepperAsync(bool positive) => RunStepperCommandAsync(positive ? "positive jog" : "negative jog", async () =>
-    {
-        var chunk = U16(FindNameInPages<NumberBox>("StepperJogChunk"), "jog chunk");
-        await _stepperModbus.SetStepperJogChunkAsync(chunk);
-        await _stepperModbus.JogStepperAsync(positive);
-    });
+    private Task JogStepperAsync(bool positive) => RunStepperCommandAsync(
+        positive ? "positive jog" : "negative jog",
+        () => _stepperModbus.JogStepperAsync(U16(FindNameInPages<NumberBox>("StepperJogChunk"), "jog chunk"), positive));
     private Task ResetStepperPositionAsync() => RunStepperCommandAsync("position reset", () => _stepperModbus.ResetStepperPositionAsync());
     private Task StartStepperHomingAsync() => RunStepperCommandAsync("homing", () => _stepperModbus.StartStepperHomingAsync());
 
@@ -1800,6 +2194,7 @@ public sealed partial class MainWindow : Window
     private async Task RunAsmCommandAsync(string operation, Func<Task> command)
     {
         if (!CanControlAsm()) return;
+        if (!await RevalidateCardBeforeWriteAsync("asm")) return;
         try { await command(); await RefreshAsmStateAsync(false); SetStatus($"ASM {operation} applied and verified."); }
         catch (Exception ex) { SetStatus($"ASM {operation} failed: {ex.Message}"); }
     }
@@ -1808,19 +2203,19 @@ public sealed partial class MainWindow : Window
         () => _stepperModbus.WriteAsmPwmAsync(U16(FindNameInPages<NumberBox>("AsmPwm1"), "PWM1"), U16(FindNameInPages<NumberBox>("AsmPwm2"), "PWM2"), U16(FindNameInPages<NumberBox>("AsmFrequency"), "frequency")));
 
     private Task ApplyAsmOutputsAsync() => RunAsmCommandAsync("digital outputs",
-        () => _stepperModbus.WriteAsmOutputsAsync(FindNameInPages<ToggleSwitch>("AsmBlower")?.IsOn == true, FindNameInPages<ToggleSwitch>("AsmOnboardLed")?.IsOn == true));
+        () => _stepperModbus.WriteAsmOutputsAsync(FindNameInPages<ToggleSwitch>("AsmBlower")?.IsOn == true));
 
-    private async void AsmOutput_Toggled(object sender, RoutedEventArgs e)
+    private async void AsmBlower_Toggled(object sender, RoutedEventArgs e)
     {
         if (_syncingAsmControls || sender is not ToggleSwitch toggle) return;
         if (!CanControlAsm())
         {
             _syncingAsmControls = true;
-            toggle.IsOn = toggle.Name == "AsmBlower" ? _lastBlowerOn : _lastOnboardLedOn;
+            toggle.IsOn = _lastBlowerOn;
             _syncingAsmControls = false;
             return;
         }
-        if (toggle.Name == "AsmBlower") UpdateFanAnimation(toggle.IsOn);
+        UpdateFanAnimation(toggle.IsOn);
         await ApplyAsmOutputsAsync();
     }
 
@@ -1841,9 +2236,10 @@ public sealed partial class MainWindow : Window
 
     private Task ClearAsmLedsAsync() => RunAsmCommandAsync("LED clear", () => _stepperModbus.ClearAsmLedsAsync());
 
-    private void StartRainbowSweep()
+    private async Task StartRainbowSweepAsync()
     {
         if (!CanControlAsm() || _rainbowCts is not null) return;
+        if (!await RevalidateCardBeforeWriteAsync("asm")) return;
         var intervalBox = FindNameInPages<NumberBox>("AsmRainbowInterval");
         var interval = intervalBox is null || double.IsNaN(intervalBox.Value) ? 180 : Math.Clamp(intervalBox.Value, 80, 2000);
         _rainbowCts = new CancellationTokenSource();
@@ -1867,11 +2263,12 @@ public sealed partial class MainWindow : Window
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                for (ushort address = 0; address < 8; address++)
-                {
-                    var color = RainbowColor((phase + address * 32) & 0xFF);
-                    await _stepperModbus.UpdateAsmLedAsync(address, color.R, color.G, color.B, cancellationToken);
-                }
+                if (!_asmAuthorized) break;
+                if (!await RevalidateCardBeforeWriteAsync("asm")) break;
+                var frame = Enumerable.Range(0, 8)
+                    .Select(address => RainbowColor((phase + address * 32) & 0xFF))
+                    .ToArray();
+                await _stepperModbus.UpdateAsmLedFrameAsync(frame, cancellationToken);
                 phase = (phase + 8) & 0xFF;
                 await Task.Delay(frameInterval, cancellationToken);
             }
@@ -1881,6 +2278,14 @@ public sealed partial class MainWindow : Window
         {
             _rainbowCts?.Dispose(); _rainbowCts = null;
             SetStatus($"WS2812 rainbow sweep stopped: {ex.Message}");
+        }
+        finally
+        {
+            if (_rainbowCts is { } active && active.Token == cancellationToken)
+            {
+                active.Dispose();
+                _rainbowCts = null;
+            }
         }
     }
 
@@ -1910,9 +2315,9 @@ public sealed partial class MainWindow : Window
             SetText("AsmPedals", state.Pedal1Latched || state.Pedal2Latched ? $"{(state.Pedal1Latched ? "P1 " : "")}{(state.Pedal2Latched ? "P2" : "")}".Trim() : "None");
             SetText("AsmFirmware", $"{state.FirmwareMajor}.{state.FirmwareMinor}");
             _syncingAsmControls = true;
-            _lastBlowerOn = state.BlowerOn; _lastOnboardLedOn = state.OnboardLedOn;
+            _lastBlowerOn = state.BlowerOn;
             if (FindNameInPages<ToggleSwitch>("AsmBlower") is { } blower) blower.IsOn = state.BlowerOn;
-            if (FindNameInPages<ToggleSwitch>("AsmOnboardLed") is { } led) led.IsOn = state.OnboardLedOn;
+            SetText("AsmHeartbeat", state.CommunicationHeartbeatOn ? "Active" : "Idle");
             _syncingAsmControls = false; UpdateFanAnimation(state.BlowerOn);
             SetNumber("AsmPwm1", state.Outputs.Pwm1Duty); SetNumber("AsmPwm2", state.Outputs.Pwm2Duty); SetNumber("AsmFrequency", state.Outputs.FrequencyHz);
             SetNumber("AsmLedAddress", state.Outputs.LedAddress); SetWs2812ColorChannels(state.Outputs.Red, state.Outputs.Green, state.Outputs.Blue); SetNumber("AsmLedBrightness", state.Outputs.Brightness);

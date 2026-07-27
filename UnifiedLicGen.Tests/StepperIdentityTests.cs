@@ -1,10 +1,18 @@
 using UnifiedLicGen.Models;
+using UnifiedLicGen.Services;
 using Xunit;
 
 namespace UnifiedLicGen.Tests;
 
 public sealed class StepperIdentityTests
 {
+    [Fact]
+    public void OperationalTransport_RetainsKnownGoodRetryAndSettlePolicy()
+    {
+        Assert.Equal(1, StepperModbusService.TransportRetryCount);
+        Assert.Equal(TimeSpan.FromMilliseconds(80), StepperModbusService.CommandStatusSettleDelay);
+    }
+
     [Fact]
     public void DriveConfiguration_MapsHoldingRegistersSixThroughEighteen()
     {

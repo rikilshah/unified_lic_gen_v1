@@ -11,6 +11,10 @@ public sealed record ConnectedCardAuthorization(
     public bool StepperAuthorized => Stepper?.IsAuthorized == true;
     public bool AnyAuthorized => AsmAuthorized || StepperAuthorized;
     public int AuthorizedCount => (AsmAuthorized ? 1 : 0) + (StepperAuthorized ? 1 : 0);
+    public ManifestValidationResult? PreferredDisplayResult =>
+        Stepper?.IsAuthorized == true ? Stepper :
+        Asm?.IsAuthorized == true ? Asm :
+        Stepper ?? Asm;
 }
 
 public sealed class CardManifestService

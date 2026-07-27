@@ -7,6 +7,8 @@ namespace UnifiedLicGen.Services;
 
 public sealed class StepperModbusService : IDisposable
 {
+    internal const int TransportRetryCount = 1;
+    internal static readonly TimeSpan CommandStatusSettleDelay = TimeSpan.FromMilliseconds(80);
     private const ushort StepperControl = 0;
     private const ushort StepperMode = 1;
     private const ushort StepperAbsoluteTarget = 2;
@@ -27,10 +29,9 @@ public sealed class StepperModbusService : IDisposable
     private const ushort AsmHoldingLedBrightness = 9;
     private const ushort AsmHoldingFrequency = 10;
     private const ushort AsmControlBlower = 0x0001;
-    private const ushort AsmControlOnboardLed = 0x0002;
     private const ushort AsmControlLedUpdate = 0x0004;
     private const ushort AsmControlLedClear = 0x0008;
-    private const ushort AsmPersistentControlMask = AsmControlBlower | AsmControlOnboardLed;
+    private const ushort AsmPersistentControlMask = AsmControlBlower;
     private const ushort IdentityStart = 4;
     private const ushort IdentityCount = 46;
     private const ushort MetadataStart = 52;
@@ -69,7 +70,7 @@ public sealed class StepperModbusService : IDisposable
             var master = _factory.CreateRtuMaster(new SerialPortAdapter(port));
             master.Transport.ReadTimeout = 600;
             master.Transport.WriteTimeout = 600;
-            master.Transport.Retries = 1;
+            master.Transport.Retries = TransportRetryCount;
             _port = port;
             _master = master;
         }
@@ -213,13 +214,6 @@ public sealed class StepperModbusService : IDisposable
                 new[] { (ushort)(config.ConfigBits & 0x000F), config.HomeChunk, config.DeadbandChunk, config.HomingSpeed, config.DeadbandSpeed }, "advanced drive setup");
         }, cancellationToken);
 
-    public Task SetStepperJogChunkAsync(ushort jogChunk, CancellationToken cancellationToken = default) =>
-        ExecuteAsync(master =>
-        {
-            EnsureStepperIdle(master, "jog chunk write");
-            WriteAndVerifyRegisters(master, 11, new[] { jogChunk }, "jog chunk");
-        }, cancellationToken);
-
     public Task MoveStepperRelativeAsync(int pulses, CancellationToken cancellationToken = default) => ExecuteAsync(master =>
     {
         EnsureStepperIdle(master, "relative move"); Split(unchecked((uint)pulses), out var low, out var high);
@@ -236,9 +230,10 @@ public sealed class StepperModbusService : IDisposable
         master.WriteSingleRegister(StepperSlaveId, StepperControl, StepperControlTrigger);
     }, cancellationToken);
 
-    public Task JogStepperAsync(bool positive, CancellationToken cancellationToken = default) => ExecuteAsync(master =>
+    public Task JogStepperAsync(ushort jogChunk, bool positive, CancellationToken cancellationToken = default) => ExecuteAsync(master =>
     {
         EnsureStepperIdle(master, positive ? "positive jog" : "negative jog");
+        WriteAndVerifyRegisters(master, 11, new[] { jogChunk }, "jog chunk");
         master.WriteSingleRegister(StepperSlaveId, StepperControl, positive ? StepperControlJogPositive : StepperControlJogNegative);
     }, cancellationToken);
 
@@ -290,12 +285,10 @@ public sealed class StepperModbusService : IDisposable
         }, cancellationToken);
     }
 
-    public Task WriteAsmOutputsAsync(bool blowerOn, bool onboardLedOn, CancellationToken cancellationToken = default) =>
+    public Task WriteAsmOutputsAsync(bool blowerOn, CancellationToken cancellationToken = default) =>
         ExecuteAsync(master =>
         {
-            var control = ReadAsmPersistentControl(master);
-            control = blowerOn ? (ushort)(control | AsmControlBlower) : (ushort)(control & ~AsmControlBlower);
-            control = onboardLedOn ? (ushort)(control | AsmControlOnboardLed) : (ushort)(control & ~AsmControlOnboardLed);
+            var control = ComposeAsmPersistentControl(ReadAsmPersistentControl(master), blowerOn);
             master.WriteSingleRegister(AsmSlaveId, AsmHoldingControl, control);
         }, cancellationToken);
 
@@ -313,10 +306,30 @@ public sealed class StepperModbusService : IDisposable
             await UpdateAsmLedAsync(address, red, green, blue, cancellationToken).ConfigureAwait(false);
     }
 
+    public Task UpdateAsmLedFrameAsync(IReadOnlyList<(ushort R, ushort G, ushort B)> colors, CancellationToken cancellationToken = default)
+    {
+        if (colors.Count != 8) throw new ArgumentException("A WS2812 frame must contain exactly 8 colors.", nameof(colors));
+        foreach (var color in colors) ValidateAsmLed(0, color.R, color.G, color.B);
+        return ExecuteAsync(master =>
+        {
+            var control = (ushort)(ReadAsmPersistentControl(master) | AsmControlLedUpdate);
+            for (ushort address = 0; address < colors.Count; address++)
+            {
+                var color = colors[address];
+                master.WriteMultipleRegisters(AsmSlaveId, AsmHoldingControl, new[] { control, address, color.R, color.G, color.B });
+            }
+        }, cancellationToken);
+    }
+
     public Task SetAsmBrightnessAsync(ushort brightness, CancellationToken cancellationToken = default)
     {
         if (brightness > 255) throw new ArgumentOutOfRangeException(nameof(brightness), "Brightness must be 0..255.");
-        return ExecuteAsync(master => master.WriteSingleRegister(AsmSlaveId, AsmHoldingLedBrightness, brightness), cancellationToken);
+        return ExecuteAsync(master =>
+        {
+            var refreshControl = ComposeAsmBrightnessRefreshControl(ReadAsmPersistentControl(master));
+            master.WriteSingleRegister(AsmSlaveId, AsmHoldingLedBrightness, brightness);
+            master.WriteSingleRegister(AsmSlaveId, AsmHoldingControl, refreshControl);
+        }, cancellationToken);
     }
 
     public Task ClearAsmLedsAsync(CancellationToken cancellationToken = default) =>
@@ -338,8 +351,13 @@ public sealed class StepperModbusService : IDisposable
 
     public void Dispose()
     {
-        DisconnectCore();
-        _gate.Dispose();
+        _gate.Wait();
+        try { DisconnectCore(); }
+        finally
+        {
+            _gate.Release();
+            _gate.Dispose();
+        }
     }
 
     private void DisconnectCore()
@@ -371,6 +389,15 @@ public sealed class StepperModbusService : IDisposable
 
     private ushort ReadAsmPersistentControl(IModbusSerialMaster master) =>
         (ushort)(master.ReadHoldingRegisters(AsmSlaveId, AsmHoldingControl, 1)[0] & AsmPersistentControlMask);
+
+    internal static ushort ComposeAsmPersistentControl(ushort currentControl, bool blowerOn)
+    {
+        var control = (ushort)(currentControl & AsmPersistentControlMask);
+        return blowerOn ? (ushort)(control | AsmControlBlower) : (ushort)(control & ~AsmControlBlower);
+    }
+
+    internal static ushort ComposeAsmBrightnessRefreshControl(ushort currentControl) =>
+        (ushort)((currentControl & AsmPersistentControlMask) | AsmControlLedUpdate);
 
     private static AsmOutputState DecodeAsmOutputs(ushort[] r)
     {

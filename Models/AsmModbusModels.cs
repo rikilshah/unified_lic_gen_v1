@@ -25,7 +25,7 @@ public sealed record AsmLiveState(
     AsmOutputState Outputs)
 {
     public bool BlowerOn => (Status & 0x0001) != 0;
-    public bool OnboardLedOn => (Status & 0x0002) != 0;
+    public bool CommunicationHeartbeatOn => (Status & 0x0002) != 0;
     public bool Ws2812Busy => (Status & 0x0004) != 0;
     public bool Ip1Active => (Status & 0x0008) != 0;
     public bool Ip2Active => (Status & 0x0010) != 0;

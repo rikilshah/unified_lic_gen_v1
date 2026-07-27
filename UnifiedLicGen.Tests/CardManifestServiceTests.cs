@@ -87,4 +87,23 @@ public sealed class CardManifestServiceTests
         Assert.Equal("asm", CardManifestService.ManifestProfile(Manifest(asm)));
         Assert.Equal("stepper", CardManifestService.ManifestProfile(Manifest(stepper)));
     }
+
+    [Fact]
+    public void ValidateConnectedCards_DisplayResultPrefersAuthorizedCard()
+    {
+        var asm = Card("A26050603", 64);
+        var stepper = Card("S26050603");
+        var invalidStepperManifest = Manifest(stepper);
+        invalidStepperManifest.CustomerId = "0000000000";
+
+        var result = new CardManifestService().ValidateConnectedCards(
+            asm,
+            Manifest(asm),
+            stepper,
+            invalidStepperManifest);
+
+        Assert.True(result.AsmAuthorized);
+        Assert.False(result.StepperAuthorized);
+        Assert.Same(result.Asm, result.PreferredDisplayResult);
+    }
 }

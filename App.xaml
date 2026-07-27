@@ -60,18 +60,22 @@
                 <Setter Property="Padding" Value="12" />
             </Style>
             <Style x:Key="PrimaryButtonStyle" TargetType="Button">
-                <Setter Property="MinHeight" Value="36" />
+                <Setter Property="MinHeight" Value="30" />
                 <Setter Property="CornerRadius" Value="4" />
-                <Setter Property="Padding" Value="14,7" />
+                <Setter Property="Padding" Value="10,4" />
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="HorizontalAlignment" Value="Left" />
                 <Setter Property="Background" Value="{StaticResource AccentBrush}" />
                 <Setter Property="Foreground" Value="#071014" />
                 <Setter Property="FontWeight" Value="SemiBold" />
                 <Setter Property="BorderThickness" Value="0" />
             </Style>
             <Style x:Key="DangerButtonStyle" TargetType="Button">
-                <Setter Property="MinHeight" Value="36" />
+                <Setter Property="MinHeight" Value="30" />
                 <Setter Property="CornerRadius" Value="4" />
-                <Setter Property="Padding" Value="14,7" />
+                <Setter Property="Padding" Value="10,4" />
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="HorizontalAlignment" Value="Left" />
                 <Setter Property="BorderBrush" Value="{StaticResource ErrorBrush}" />
                 <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
             </Style>
