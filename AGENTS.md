@@ -15,4 +15,3 @@ Every committed change that affects application code, UI behavior, hardware comm
 6. Commit the implementation, tests, changelog, and version metadata together.
 
 When an Admin change is mirrored into the Technician app, apply and verify an independent version increment in both repositories. Documentation-only or test-only changes that do not alter the shipped application may retain the current application version.
-
