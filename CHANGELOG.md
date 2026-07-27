@@ -2,6 +2,12 @@
 
 All notable changes to UnifiedLicGen are documented here.
 
+## [2.0.2] - 2026-07-27
+
+### Changed
+
+- Matched the Technician dashboard by aligning the ASM blower, communication heartbeat, IP1, and IP2 elements in one compact two-column I/O grid.
+
 ## [2.0.1] - 2026-07-27
 
 ### Added

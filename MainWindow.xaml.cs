@@ -447,17 +447,27 @@ public sealed partial class MainWindow : Window
         pwm.Children.Add(ActionButton("Apply and verify", async (_, _) => await ApplyAsmPwmAsync(), true)); work.Children.Add(pwm);
 
         var io = Card("Inputs and outputs");
-        var blower = new ToggleSwitch { Name = "AsmBlower", Header = "Blower", OffContent = "Off", OnContent = "On" };
+        var blower = new ToggleSwitch { Name = "AsmBlower", OffContent = "Off", OnContent = "On", HorizontalAlignment = HorizontalAlignment.Left };
         blower.Toggled += AsmBlower_Toggled;
         var fan = BuildFanIndicator();
-        var outputs = Columns(2);
-        outputs.Children.Add(RowWith(blower, fan));
-        outputs.Children.Add(CompactStatus("Communication heartbeat", "Idle", "AsmHeartbeat"));
-        io.Children.Add(outputs);
-        var inputs = Columns(2);
-        inputs.Children.Add(InputIndicator("IP1", "AsmIp1", "AsmIp1Dot"));
-        inputs.Children.Add(InputIndicator("IP2", "AsmIp2", "AsmIp2Dot"));
-        io.Children.Add(inputs);
+        var blowerState = new Grid { ColumnSpacing = 8, HorizontalAlignment = HorizontalAlignment.Stretch };
+        blowerState.ColumnDefinitions.Add(new ColumnDefinition());
+        blowerState.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        blowerState.Children.Add(blower);
+        Grid.SetColumn(fan, 1); blowerState.Children.Add(fan);
+
+        var ioGrid = Columns(2);
+        ioGrid.ColumnSpacing = 10;
+        ioGrid.RowSpacing = 8;
+        ioGrid.Children.Add(AsmIoTile("Blower", blowerState));
+        ioGrid.Children.Add(AsmIoTile("Communication heartbeat", new TextBlock
+        {
+            Name = "AsmHeartbeat", Text = "Idle", FontFamily = new FontFamily("Cascadia Mono"),
+            FontSize = 12, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+        }));
+        ioGrid.Children.Add(AsmInputTile("IP1", "AsmIp1", "AsmIp1Dot"));
+        ioGrid.Children.Add(AsmInputTile("IP2", "AsmIp2", "AsmIp2Dot"));
+        io.Children.Add(ioGrid);
         work.Children.Add(io);
 
         var diagnostics = Card("Diagnostics");
@@ -902,6 +912,41 @@ public sealed partial class MainWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); grid.ColumnDefinitions.Add(new ColumnDefinition()); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.Children.Add(dot); var title = new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center }; Grid.SetColumn(title, 1); grid.Children.Add(title); Grid.SetColumn(text, 2); grid.Children.Add(text);
         return grid;
+    }
+
+    private Border AsmIoTile(string label, UIElement content)
+    {
+        var panel = new Grid { RowSpacing = 4, HorizontalAlignment = HorizontalAlignment.Stretch };
+        panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        panel.RowDefinitions.Add(new RowDefinition());
+        panel.Children.Add(new TextBlock { Text = label, FontSize = 11, Foreground = Brush("TextSecondaryBrush") });
+        Grid.SetRow((FrameworkElement)content, 1);
+        panel.Children.Add(content);
+        return new Border
+        {
+            MinHeight = 56,
+            Padding = new Thickness(9, 7, 9, 7),
+            Background = Brush("RaisedBrush"),
+            BorderBrush = Brush("BorderBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Child = panel
+        };
+    }
+
+    private Border AsmInputTile(string label, string textName, string dotName)
+    {
+        var dot = new Microsoft.UI.Xaml.Shapes.Ellipse
+        {
+            Name = dotName, Width = 10, Height = 10, Fill = Brush("ErrorBrush"), VerticalAlignment = VerticalAlignment.Center
+        };
+        var text = new TextBlock
+        {
+            Name = textName, Text = "Inactive", FontFamily = new FontFamily("Cascadia Mono"),
+            FontSize = 12, VerticalAlignment = VerticalAlignment.Center
+        };
+        return AsmIoTile(label, RowWith(dot, text));
     }
 
     private Grid BuildFanIndicator()
