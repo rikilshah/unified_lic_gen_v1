@@ -19,7 +19,7 @@ Run `UnifiedLicGen.exe` from that folder. Distribute the entire folder; WinUI ru
 To create a release ZIP:
 
 ```powershell
-Compress-Archive -Path .\artifacts\publish\win-x64\* -DestinationPath .\artifacts\UnifiedLicGen-v2.0.0-win-x64.zip -Force
+Compress-Archive -Path .\artifacts\publish\win-x64\* -DestinationPath .\artifacts\UnifiedLicGen-vX.Y.Z-win-x64.zip -Force
 ```
 
 ## What self-contained means
@@ -35,9 +35,22 @@ Firmware operations still require:
 - access to the configured `PCB_LIC_DB` target folder;
 - an available Modbus COM port.
 
-## Version updates
+## Mandatory version updates
 
-Update `Version`, `AssemblyVersion`, and `FileVersion` in `UnifiedLicGen.csproj`, then update the ZIP filename above. The assembly version automatically appears in the native window title, application header, status bar, and executable metadata.
+Every application update must carry its version in the same commit as the implementation. Do not commit application code, UI, hardware-control, provisioning, dependency, or packaging changes without completing all of these steps:
+
+1. Choose a Semantic Versioning increment: PATCH for fixes and maintenance, MINOR for backward-compatible features, or MAJOR for breaking changes.
+2. Update `Version`, `AssemblyVersion`, and `FileVersion` in `UnifiedLicGen.csproj`.
+3. Add a dated entry for that exact version to `CHANGELOG.md`.
+4. Run the full test suite and publish the standalone package.
+5. Verify the generated binary metadata:
+
+```powershell
+(Get-Item .\artifacts\publish\win-x64\UnifiedLicGen.dll).VersionInfo |
+    Select-Object ProductVersion, FileVersion
+```
+
+The native title bar, application header, status bar, ZIP name, changelog, and executable metadata must all identify the same release. When the same change is mirrored into the Technician app, bump and verify that repository independently. Documentation-only or test-only commits that do not change the shipped application may retain the existing version.
 
 ## Release verification
 
