@@ -2,6 +2,13 @@
 
 All notable changes to UnifiedLicGen are documented here.
 
+## [2.0.4] - 2026-07-29
+
+### Fixed
+
+- Restored normal Visual Studio and command-line builds by limiting the architecture-specific Windows App SDK self-contained settings to the `win-x64` publish profile.
+- Kept portable releases fully self-contained while preventing `AnyCPU` development builds from failing with `WindowsAppSDKSelfContained requires a supported Windows architecture`.
+
 ## [2.0.3] - 2026-07-29
 
 ### Fixed

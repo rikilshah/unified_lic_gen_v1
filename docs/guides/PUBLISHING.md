@@ -61,9 +61,12 @@ The native title bar, application header, status bar, ZIP name, changelog, and e
 Before distribution:
 
 ```powershell
+dotnet build .\UnifiedLicGen.csproj -c Debug
 dotnet test .\UnifiedLicGen.Tests\UnifiedLicGen.Tests.csproj -p:Platform=x64
 .\scripts\Publish-Portable.ps1 -ProjectFile UnifiedLicGen.csproj -ExecutableName UnifiedLicGen.exe -PackageBaseName UnifiedLicGen -DisplayName "Unified Admin Dashboard"
 .\artifacts\release\UnifiedLicGen-vX.Y.Z-win-x64\START Unified Admin Dashboard.cmd
 ```
+
+The first command intentionally uses the default Visual Studio/`AnyCPU` development configuration. Self-contained Windows App SDK extraction is enabled only by the `win-x64` publish profile, where the architecture is explicit.
 
 Confirm COM discovery, board verification, and the correct hardware tool paths on the target workstation before performing a production flash.
