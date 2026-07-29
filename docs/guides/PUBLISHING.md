@@ -2,29 +2,33 @@
 
 ## Standalone Windows x64 build
 
-From the repository root:
+From the repository root, create the validated portable package:
 
 ```powershell
-dotnet publish UnifiedLicGen.csproj -p:PublishProfile=win-x64
+.\scripts\Publish-Portable.ps1 -ProjectFile UnifiedLicGen.csproj -ExecutableName UnifiedLicGen.exe -PackageBaseName UnifiedLicGen -DisplayName "Unified Admin Dashboard"
 ```
 
-The distributable folder is:
+The raw publish output remains available for build diagnostics:
 
 ```text
 artifacts\publish\win-x64\
 ```
 
-Run `UnifiedLicGen.exe` from that folder. Distribute the entire folder; WinUI runtime assets and native DLLs must remain beside the executable.
+The validated distributable folder and archive are:
 
-To create a release ZIP:
-
-```powershell
-Compress-Archive -Path .\artifacts\publish\win-x64\* -DestinationPath .\artifacts\UnifiedLicGen-vX.Y.Z-win-x64.zip -Force
+```text
+artifacts\release\UnifiedLicGen-vX.Y.Z-win-x64\
+artifacts\UnifiedLicGen-vX.Y.Z-win-x64.zip
+artifacts\UnifiedLicGen-vX.Y.Z-win-x64.zip.sha256
 ```
+
+Extract the entire ZIP and run `START Unified Admin Dashboard.cmd`. The application and its private .NET/WinUI runtime are intentionally kept together under `app\`. Do not distribute or copy `UnifiedLicGen.exe` by itself.
+
+The release builder rejects missing or zero-length runtime files, checks the binary version, generates `SHA256SUMS.txt`, verifies the staged folder, and then creates the archive plus its checksum. On a target PC, `VERIFY PACKAGE.cmd` identifies a missing or damaged file before troubleshooting the application.
 
 ## What self-contained means
 
-The package includes the required .NET and Windows App SDK runtimes. The destination PC does not need a separate .NET installation.
+The package includes the required .NET and Windows App SDK runtimes. The destination PC does not need separate .NET or Windows App Runtime installations.
 
 Firmware operations still require:
 
@@ -42,7 +46,7 @@ Every application update must carry its version in the same commit as the implem
 1. Choose a Semantic Versioning increment: PATCH for fixes and maintenance, MINOR for backward-compatible features, or MAJOR for breaking changes.
 2. Update `Version`, `AssemblyVersion`, and `FileVersion` in `UnifiedLicGen.csproj`.
 3. Add a dated entry for that exact version to `CHANGELOG.md`.
-4. Run the full test suite and publish the standalone package.
+4. Run the full test suite and build the validated portable package.
 5. Verify the generated binary metadata:
 
 ```powershell
@@ -58,8 +62,8 @@ Before distribution:
 
 ```powershell
 dotnet test .\UnifiedLicGen.Tests\UnifiedLicGen.Tests.csproj -p:Platform=x64
-dotnet publish UnifiedLicGen.csproj -p:PublishProfile=win-x64
-.\artifacts\publish\win-x64\UnifiedLicGen.exe
+.\scripts\Publish-Portable.ps1 -ProjectFile UnifiedLicGen.csproj -ExecutableName UnifiedLicGen.exe -PackageBaseName UnifiedLicGen -DisplayName "Unified Admin Dashboard"
+.\artifacts\release\UnifiedLicGen-vX.Y.Z-win-x64\START Unified Admin Dashboard.cmd
 ```
 
 Confirm COM discovery, board verification, and the correct hardware tool paths on the target workstation before performing a production flash.

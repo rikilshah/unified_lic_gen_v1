@@ -2,6 +2,18 @@
 
 All notable changes to UnifiedLicGen are documented here.
 
+## [2.0.3] - 2026-07-29
+
+### Fixed
+
+- Hardened the portable Windows package so incomplete extraction is detected before .NET or WinUI starts instead of failing with a missing `System.Private.CoreLib.dll` or Windows App Runtime error.
+- Moved Windows App SDK self-contained initialization into the application project so every supported publish path includes the private WinUI runtime.
+
+### Changed
+
+- Updated Windows App SDK to the latest 1.8 servicing release.
+- Portable releases now keep the runtime payload under `app`, provide a checked root launcher, and include per-file plus archive SHA-256 manifests.
+
 ## [2.0.2] - 2026-07-27
 
 ### Changed
