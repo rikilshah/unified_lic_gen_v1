@@ -39,6 +39,8 @@ Firmware operations still require:
 - access to the configured `PCB_LIC_DB` target folder;
 - an available Modbus COM port.
 
+For ASM WS2812 testing and control, use VCB240002 firmware `2.1` or later. Firmware `2.1` keeps the existing Modbus register and manifest formats while correcting the physical LED waveform.
+
 ## Mandatory version updates
 
 Every application update must carry its version in the same commit as the implementation. Do not commit application code, UI, hardware-control, provisioning, dependency, or packaging changes without completing all of these steps:

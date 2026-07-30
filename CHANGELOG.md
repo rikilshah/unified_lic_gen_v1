@@ -2,6 +2,13 @@
 
 All notable changes to UnifiedLicGen are documented here.
 
+## [2.0.5] - 2026-07-30
+
+### Changed
+
+- Marked ASM firmware `2.1` as the recommended build for WS2812 testing and control while preserving the existing Modbus register and manifest formats.
+- Coordinated the Admin release with the verified VCB240002 firmware fix that prevents a refresh or clear command from intermittently turning LED 0 green.
+
 ## [2.0.4] - 2026-07-29
 
 ### Fixed
